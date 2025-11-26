@@ -541,6 +541,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex-grow min-h-0">
               <LogViewer
+                key={activeTab.id}
                 logs={filteredLogs}
                 totalCount={baseLogs.length}
                 selectedTimezone={selectedTimezone}

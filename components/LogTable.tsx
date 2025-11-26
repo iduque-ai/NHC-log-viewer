@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { LogEntry, LogLevel } from '../types.ts';
 import { exportToCsv, exportToTxt, formatTimestamp, extractKeywordsFromQuery } from '../utils/helpers.ts';
 
@@ -126,6 +126,9 @@ export const LogTable: React.FC<LogTableProps> = ({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollRequestRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  
+  // Track previous page to determine scrolling direction
+  const prevPageRef = useRef(currentPage);
 
   // Pagination input state
   const [pageInput, setPageInput] = useState(currentPage.toString());
@@ -197,7 +200,13 @@ export const LogTable: React.FC<LogTableProps> = ({
     }
   }, [matchingIndices]); // Intentionally not including currentPage to avoid re-jumping when user manually pages
 
-  const keywordsToHighlight = useMemo(() => (keywordQueries || []).flatMap(q => extractKeywordsFromQuery(q)), [keywordQueries]);
+  const keywordsToHighlight = useMemo(() => {
+    const keys = new Set<string>();
+    if (enableKeywordHighlight) {
+        (keywordQueries || []).flatMap(q => extractKeywordsFromQuery(q)).forEach(k => keys.add(k));
+    }
+    return Array.from(keys);
+  }, [keywordQueries, enableKeywordHighlight]);
 
   const totalPages = Math.ceil(data.length / logsPerPage);
 
@@ -223,66 +232,112 @@ export const LogTable: React.FC<LogTableProps> = ({
   // Combined ID to scroll to (either from props or internal search)
   const targetScrollId = scrollToLogId ?? internalScrollId;
 
-  useLayoutEffect(() => {
+  // Use useEffect to handle scrolling after render and layout paint.
+  // We use a timeout to ensure the browser has settled after a tab switch.
+  useEffect(() => {
     if (targetScrollId === null) return;
 
-    const rowElement = rowRefs.current.get(targetScrollId);
-    if (rowElement) {
-        rowElement.scrollIntoView({ behavior: 'auto', block: 'center' });
-        setHighlightedRowId(targetScrollId);
-        const timer = setTimeout(() => setHighlightedRowId(null), 2500);
+    const attemptScroll = () => {
+        const rowElement = rowRefs.current.get(targetScrollId);
         
-        // After scrolling, we update the tab's scrollTop state so it's not lost.
-        queueMicrotask(() => {
-            if (tableContainerRef.current && onScrollChange) {
-                onScrollChange(tableContainerRef.current.scrollTop);
+        if (rowElement) {
+            rowElement.scrollIntoView({ behavior: 'auto', block: 'center' });
+            setHighlightedRowId(targetScrollId);
+            // Timeout removed to keep results highlighted persistently
+            
+            // Allow layout to update before capturing scrollTop and clearing the target
+            // This ensures the new scroll position is saved to state before targetScrollId becomes null
+            setTimeout(() => {
+                if (tableContainerRef.current && onScrollChange) {
+                    onScrollChange(tableContainerRef.current.scrollTop);
+                }
+                
+                // Clear external scroll request
+                if (targetScrollId === scrollToLogId && onScrollComplete) {
+                    onScrollComplete();
+                }
+                // Clear internal scroll request
+                if (targetScrollId === internalScrollId) {
+                    setInternalScrollId(null);
+                }
+            }, 100);
+        } 
+        
+        // If row is not on current page, switch page
+        const logIndex = data.findIndex(log => log.id === targetScrollId);
+        if (logIndex !== -1) {
+            const targetPage = Math.floor(logIndex / logsPerPage) + 1;
+            if (targetPage !== currentPage) {
+                onPageChange(targetPage);
             }
-            // Clear external scroll request
-            if (targetScrollId === scrollToLogId && onScrollComplete) {
-                onScrollComplete();
-            }
-            // Clear internal scroll request
-            if (targetScrollId === internalScrollId) {
-                setInternalScrollId(null);
-            }
-        });
-
-        return () => clearTimeout(timer);
-    }
-
-    // If row is not on current page, switch page
-    const logIndex = data.findIndex(log => log.id === targetScrollId);
-    if (logIndex !== -1) {
-        const targetPage = Math.floor(logIndex / logsPerPage) + 1;
-        if (targetPage !== currentPage) {
-            onPageChange(targetPage);
+        } else {
+            // ID not found (e.g. filtered out), just clear the request
+            if (targetScrollId === scrollToLogId && onScrollComplete) onScrollComplete();
+            if (targetScrollId === internalScrollId) setInternalScrollId(null);
         }
-    } else {
-        // ID not found (e.g. filtered out), just clear the request
-        if (targetScrollId === scrollToLogId && onScrollComplete) onScrollComplete();
-        if (targetScrollId === internalScrollId) setInternalScrollId(null);
-    }
+    };
+
+    const timeoutId = setTimeout(attemptScroll, 100);
+    return () => clearTimeout(timeoutId);
+
   }, [targetScrollId, currentPage, data, onScrollComplete, logsPerPage, onPageChange, onScrollChange, scrollToLogId, internalScrollId]);
 
-  // Restore scroll position when switching tabs/pages, unless we are targeting a specific log
+  // Restore scroll position when switching tabs/pages
   useEffect(() => {
+    // Always track the current page, even if we are in "targeting" mode. 
+    // This prevents stale previousPage values from triggering unwanted scroll resets when targeting finishes.
+    const previousPage = prevPageRef.current;
+    prevPageRef.current = currentPage;
+
     if (targetScrollId !== null) return;
 
+    const isPageChange = previousPage !== currentPage;
+    const isGoingBack = currentPage < previousPage;
+    
     // Defer scroll restoration to ensure the DOM has updated
     const timerId = setTimeout(() => {
         if (tableContainerRef.current) {
-            tableContainerRef.current.scrollTop = scrollTop;
+            if (isPageChange) {
+                if (isGoingBack) {
+                    tableContainerRef.current.scrollTop = tableContainerRef.current.scrollHeight;
+                } else {
+                    tableContainerRef.current.scrollTop = 0;
+                }
+            } else {
+                tableContainerRef.current.scrollTop = scrollTop;
+            }
         }
     }, 0);
 
     return () => clearTimeout(timerId);
 
-  }, [paginatedData, targetScrollId]);
+  }, [paginatedData, targetScrollId, currentPage, scrollTop]);
 
 
   const handleNextPage = () => onPageChange(Math.min(currentPage + 1, totalPages));
   const handlePrevPage = () => onPageChange(Math.max(currentPage - 1, 1));
   
+  // Handle global shortcuts
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+        const target = e.target as HTMLElement;
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable) {
+            return;
+        }
+
+        if (e.key === 'PageUp') {
+            e.preventDefault();
+            onPageChange(Math.min(currentPage + 1, totalPages)); // Next Page
+        } else if (e.key === 'PageDown') {
+            e.preventDefault();
+            onPageChange(Math.max(currentPage - 1, 1)); // Prev Page
+        }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [currentPage, totalPages, onPageChange]);
+
   const handlePageInputSubmit = () => {
     let p = parseInt(pageInput, 10);
     if (isNaN(p)) {
@@ -300,10 +355,10 @@ export const LogTable: React.FC<LogTableProps> = ({
         handlePageInputSubmit();
     } else if (e.key === 'PageUp') {
         e.preventDefault();
-        handlePrevPage();
+        handleNextPage();
     } else if (e.key === 'PageDown') {
         e.preventDefault();
-        handleNextPage();
+        handlePrevPage();
     } else if (e.key === 'Home') {
         e.preventDefault();
         onPageChange(1);
@@ -527,7 +582,7 @@ export const LogTable: React.FC<LogTableProps> = ({
                   {visibleColumns.hostname && <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-300">{log.hostname}</td>}
                   {visibleColumns.pid && <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-300">{log.pid}</td>}
                   {visibleColumns.module && <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-300">{log.module}</td>}
-                  {visibleColumns.message && <td className="px-6 py-4 text-sm text-gray-300 font-mono break-all">{enableKeywordHighlight ? highlightKeywords(log.message, keywordsToHighlight, onKeywordClick) : log.message}</td>}
+                  {visibleColumns.message && <td className="px-6 py-4 text-sm text-gray-300 font-mono break-all">{keywordsToHighlight.length > 0 ? highlightKeywords(log.message, keywordsToHighlight, onKeywordClick) : log.message}</td>}
                   {visibleColumns.functionName && <td className="px-3 py-4 whitespace-nowrap text-sm text-gray-300">{log.functionName}</td>}
                 </tr>
               ))
