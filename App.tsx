@@ -152,10 +152,11 @@ const App: React.FC = () => {
       } else if (file.name.endsWith('.gz')) {
         try {
             const buffer = await file.arrayBuffer();
-            const textContent = ungzip(new Uint8Array(buffer), { to: 'string' });
+            // Explicitly cast to string to avoid TypeScript 'any' inference errors
+            const textContent = ungzip(new Uint8Array(buffer), { to: 'string' }) as string;
             const parsedLogs = textContent
                 .split('\n')
-                .map((line) => parseLogLine(line, logIdCounter.current++))
+                .map((line: string) => parseLogLine(line, logIdCounter.current++))
                 .filter((log): log is LogEntry => log !== null);
             
             newFileInfos.push({
