@@ -646,7 +646,7 @@ export const LogTable: React.FC<LogTableProps> = ({
           {visibleColumns.hostname && <td className={`px-3 py-4 whitespace-nowrap text-sm text-gray-300 ${COLUMN_WIDTHS.hostname}`}><div className="truncate" title={log.hostname}>{log.hostname}</div></td>}
           {visibleColumns.pid && <td className={`px-3 py-4 whitespace-nowrap text-sm text-gray-300 ${COLUMN_WIDTHS.pid}`}>{log.pid}</td>}
           {visibleColumns.module && <td className={`px-3 py-4 whitespace-nowrap text-sm text-gray-300 ${COLUMN_WIDTHS.module}`}><div className="truncate" title={log.module}>{log.module}</div></td>}
-          {visibleColumns.message && <td className={`px-6 py-4 text-sm text-gray-300 font-mono break-all ${COLUMN_WIDTHS.message}`}>{keywordsToHighlight.length > 0 ? highlightKeywords(log.message, keywordsToHighlight, onKeywordClick) : log.message}</td>}
+          {visibleColumns.message && <td className={`px-3 py-4 text-sm text-gray-300 font-mono break-all ${COLUMN_WIDTHS.message}`}>{keywordsToHighlight.length > 0 ? highlightKeywords(log.message, keywordsToHighlight, onKeywordClick) : log.message}</td>}
           {visibleColumns.functionName && <td className={`px-3 py-4 whitespace-nowrap text-sm text-gray-300 ${COLUMN_WIDTHS.functionName}`}><div className="truncate" title={log.functionName}>{log.functionName}</div></td>}
         </tr>
     ));

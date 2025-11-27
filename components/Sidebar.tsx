@@ -11,7 +11,7 @@ interface SidebarProps {
   allDaemons: string[];
   allModules: string[];
   allFunctionNames: string[];
-  onNewTab: () => void;
+  onNewTab: (withFilters: boolean) => void;
   isLoading: boolean;
   fileInfos: FileInfo[];
   onAppendFiles: (files: File[]) => void;
@@ -21,6 +21,11 @@ interface SidebarProps {
   filtersDisabled?: boolean;
   currentKeywordInput: string;
   onCurrentKeywordInputChange: (value: string) => void;
+  globalDateRange: [Date | null, Date | null];
+  onResetDateRange: () => void;
+  onExportFilters: () => void;
+  onImportFilters: (file: File) => void;
+  isAllLogs: boolean;
 }
 
 const logLevels = Object.values(LogLevel);
@@ -36,18 +41,14 @@ const parseDateInTimezone = (dateString: string, timezone: string): Date | null 
     }
 
     try {
-        // For IANA timezones, we construct an ISO string with the correct offset.
-        // 1. Create a stable date object by interpreting input as UTC to avoid local timezone biases.
         const [datePart, timePart] = dateString.split('T');
-        if (!datePart || !timePart) return new Date(dateString); // Fallback for unexpected format
+        if (!datePart || !timePart) return new Date(dateString); 
         
         const [year, month, day] = datePart.split('-').map(Number);
         const [hour, minute, second] = timePart.split(':').map(Number);
         
-        // This date represents the point in time if the user input were UTC. It's a stable reference.
         const sampleDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
 
-        // 2. Find the offset for that time in the target timezone.
         const formatter = new Intl.DateTimeFormat('en-US', {
             timeZone: timezone,
             timeZoneName: 'longOffset',
@@ -56,7 +57,6 @@ const parseDateInTimezone = (dateString: string, timezone: string): Date | null 
         const offsetPart = parts.find(p => p.type === 'timeZoneName');
         
         if (offsetPart) {
-            // e.g., 'GMT-4' or 'GMT+5:30' -> '-04:00' or '+05:30'
             const offsetString = offsetPart.value.replace('GMT', '');
             const sign = offsetString.startsWith('-') ? '-' : '+';
             const numParts = offsetString.substring(1).split(':');
@@ -70,7 +70,6 @@ const parseDateInTimezone = (dateString: string, timezone: string): Date | null 
         console.error(`Error parsing date in timezone "${timezone}":`, e);
     }
     
-    // Fallback for invalid timezone or other errors
     return new Date(dateString);
 };
 
@@ -92,7 +91,6 @@ const formatDateForDateTimeLocalInTimezone = (date: Date | null, timezone: strin
         }
     }
 
-    // 'sv-SE' (Swedish) locale gives a clean YYYY-MM-DD HH:MM:SS format
     const formatted = new Intl.DateTimeFormat('sv-SE', options).format(date);
     return formatted.replace(' ', 'T');
 };
@@ -100,8 +98,10 @@ const formatDateForDateTimeLocalInTimezone = (date: Date | null, timezone: strin
 
 interface KeywordFilterProps {
   queries: string[];
+  matchMode: 'AND' | 'OR';
   fixedQueries?: string[];
   onChange: (queries: string[]) => void;
+  onMatchModeChange: (mode: 'AND' | 'OR') => void;
   disabled: boolean;
   highlightEnabled: boolean;
   onHighlightChange: (enabled: boolean) => void;
@@ -111,8 +111,10 @@ interface KeywordFilterProps {
 
 const KeywordFilter: React.FC<KeywordFilterProps> = ({ 
   queries, 
+  matchMode,
   fixedQueries = [],
   onChange, 
+  onMatchModeChange,
   disabled, 
   highlightEnabled, 
   onHighlightChange,
@@ -130,6 +132,10 @@ const KeywordFilter: React.FC<KeywordFilterProps> = ({
   const handleRemoveQuery = (queryToRemove: string) => {
     if (fixedQueries.includes(queryToRemove)) return;
     onChange(queries.filter(q => q !== queryToRemove));
+  };
+
+  const handleRemoveAll = () => {
+    onChange(fixedQueries);
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -165,17 +171,31 @@ const KeywordFilter: React.FC<KeywordFilterProps> = ({
               </button>
           </div>
       </div>
-      <div className="flex space-x-2">
-        <input
-          type="text"
-          id="keyword"
-          value={inputValue}
-          onChange={(e) => onInputValueChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="e.g. (error || fail)"
-          disabled={disabled}
-          className="flex-grow w-full bg-gray-700 border border-gray-600 text-white rounded-md shadow-sm p-2 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-800"
-        />
+      <div className="flex space-x-2 mb-1">
+        <div className="relative flex-grow">
+          <input
+            type="text"
+            id="keyword"
+            value={inputValue}
+            onChange={(e) => onInputValueChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="e.g. (error || fail)"
+            disabled={disabled}
+            className="w-full bg-gray-700 border border-gray-600 text-white rounded-md shadow-sm p-2 pr-8 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-800"
+          />
+          {inputValue && (
+            <button
+              onClick={() => onInputValueChange('')}
+              disabled={disabled}
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
+              title="Clear input"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
+        </div>
         <button
           onClick={handleAddQuery}
           disabled={disabled || !inputValue.trim()}
@@ -184,6 +204,42 @@ const KeywordFilter: React.FC<KeywordFilterProps> = ({
           Add
         </button>
       </div>
+      <p className="text-xs text-gray-500 mb-2">
+        Use &&, ||, !, () within a single filter term.
+      </p>
+      
+      {queries.length > 0 && (
+         <div className="flex justify-between items-center mb-2">
+             <div className="flex items-center space-x-2">
+                 <span className="text-xs text-gray-400">Match Mode:</span>
+                 <div className="flex bg-gray-700 rounded p-0.5">
+                     <button
+                        onClick={() => onMatchModeChange('AND')}
+                        disabled={disabled}
+                        className={`px-2 py-0.5 text-xs rounded transition-colors ${matchMode === 'AND' ? 'bg-gray-500 text-white' : 'text-gray-400 hover:text-white'}`}
+                     >
+                        ALL (AND)
+                     </button>
+                     <button
+                        onClick={() => onMatchModeChange('OR')}
+                        disabled={disabled}
+                        className={`px-2 py-0.5 text-xs rounded transition-colors ${matchMode === 'OR' ? 'bg-gray-500 text-white' : 'text-gray-400 hover:text-white'}`}
+                     >
+                        ANY (OR)
+                     </button>
+                 </div>
+             </div>
+             <button
+                onClick={() => !disabled && handleRemoveAll()}
+                disabled={disabled}
+                className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 hover:underline"
+                title="Remove all keywords"
+             >
+                Reset
+             </button>
+         </div>
+      )}
+
       <div className="mt-2 flex flex-wrap gap-1">
         {queries.map((q) => {
           const isFixed = fixedQueries.includes(q);
@@ -204,9 +260,6 @@ const KeywordFilter: React.FC<KeywordFilterProps> = ({
           )
         })}
       </div>
-      <p className="text-xs text-gray-500 mt-1">
-        Each filter is combined with AND. Use &&, ||, !, () within a filter.
-      </p>
     </div>
   );
 };
@@ -289,9 +342,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentKeywordInput,
   onCurrentKeywordInputChange,
   filtersDisabled = false,
+  globalDateRange,
+  onResetDateRange,
+  onExportFilters,
+  onImportFilters,
+  isAllLogs,
 }) => {
-  const { selectedLevels, selectedDaemons, selectedModules, selectedFunctionNames, dateRange, keywordQueries, enableKeywordHighlight } = filterState;
+  const { selectedLevels, selectedDaemons, selectedModules, selectedFunctionNames, dateRange, keywordQueries, keywordMatchMode, enableKeywordHighlight } = filterState;
   const filtersDisabledEffective = filtersDisabled || isLoading;
+  const importInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleDateChange = (index: 0 | 1, value: string) => {
     const newDateRange = [...dateRange] as [Date | null, Date | null];
@@ -313,9 +372,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return allFunctionNames;
   }, [allFunctionNames, fixedFilters]);
 
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      onImportFilters(e.target.files[0]);
+      e.target.value = '';
+    }
+  };
+
   return (
     <aside className="w-80 bg-gray-800 flex flex-col p-4 border-r border-gray-700 h-full">
-      <h1 className="text-xl font-bold text-white mb-4">NHC Log Viewer</h1>
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-xl font-bold text-white">NHC Log Viewer</h1>
+      </div>
 
       <DataSources
         fileInfos={fileInfos}
@@ -325,18 +397,113 @@ export const Sidebar: React.FC<SidebarProps> = ({
       />
 
       <div className="flex-grow space-y-4 pt-4 overflow-y-auto min-h-0">
-        <h2 className="text-lg font-bold text-white mb-2">Filters</h2>
+        <div className="flex justify-between items-center">
+             <h2 className="text-lg font-bold text-white">Filters</h2>
+             <div className="flex space-x-1">
+                 <button
+                   onClick={onExportFilters}
+                   disabled={filtersDisabledEffective}
+                   className="p-1 text-gray-400 hover:text-white rounded disabled:opacity-50"
+                   title="Export Filters (JSON)"
+                 >
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                 </button>
+                 <button
+                   onClick={handleImportClick}
+                   disabled={filtersDisabledEffective}
+                   className="p-1 text-gray-400 hover:text-white rounded disabled:opacity-50"
+                   title="Import Filters (JSON)"
+                 >
+                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                 </button>
+                 <input
+                   type="file"
+                   ref={importInputRef}
+                   className="hidden"
+                   accept=".json"
+                   onChange={handleImportFileChange}
+                 />
+             </div>
+        </div>
         
         <KeywordFilter
           queries={keywordQueries}
+          matchMode={keywordMatchMode}
           fixedQueries={fixedFilters?.keywordQueries}
           onChange={(queries) => onFilterChange({ keywordQueries: queries })}
+          onMatchModeChange={(mode) => onFilterChange({ keywordMatchMode: mode })}
           disabled={filtersDisabledEffective}
           highlightEnabled={enableKeywordHighlight}
           onHighlightChange={(enabled) => onFilterChange({ enableKeywordHighlight: enabled })}
           inputValue={currentKeywordInput}
           onInputValueChange={onCurrentKeywordInputChange}
         />
+
+        <div className="space-y-3">
+            <div className="flex justify-between items-center mb-1">
+                <div className="flex items-center space-x-2">
+                    <label className="text-sm font-medium text-gray-400">Date Range</label>
+                    <button
+                        onClick={onResetDateRange}
+                        disabled={isLoading || filtersDisabledEffective}
+                        className="text-xs text-blue-400 hover:text-blue-300 disabled:text-gray-600 transition-colors focus:outline-none"
+                    >
+                        Reset
+                    </button>
+                </div>
+                <div className="relative">
+                    <select
+                        id="timezone-select"
+                        value={selectedTimezone}
+                        onChange={(e) => setSelectedTimezone(e.target.value)}
+                        disabled={isLoading}
+                        className="bg-gray-800 border border-gray-600 text-white rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 appearance-none pr-6 cursor-pointer"
+                        title="Select Timezone"
+                    >
+                        <option value="local">Local</option>
+                        <option value="UTC">UTC</option>
+                        <option value="America/New_York">NY (ET)</option>
+                        <option value="America/Chicago">CHI (CT)</option>
+                        <option value="America/Denver">DEN (MT)</option>
+                        <option value="America/Los_Angeles">LA (PT)</option>
+                        <option value="Europe/London">LDN (GMT)</option>
+                        <option value="Europe/Berlin">BER (CET)</option>
+                        <option value="Asia/Tokyo">TYO (JST)</option>
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-1 text-gray-400">
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </div>
+                </div>
+            </div>
+            <div className="space-y-2">
+                <div className="relative">
+                   <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-500 z-10">
+                     <span className="text-xs font-semibold">Start</span>
+                   </div>
+                   <input 
+                      type="datetime-local" 
+                      step="1"
+                      value={formatDateForDateTimeLocalInTimezone(dateRange[0] || globalDateRange[0], selectedTimezone)} 
+                      onChange={(e) => handleDateChange(0, e.target.value)} 
+                      disabled={filtersDisabledEffective} 
+                      className="w-full bg-gray-700/50 border border-gray-600 text-white rounded-md py-2 pl-12 pr-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm" 
+                    />
+                </div>
+                <div className="relative">
+                   <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-500 z-10">
+                     <span className="text-xs font-semibold">End</span>
+                   </div>
+                   <input 
+                      type="datetime-local" 
+                      step="1"
+                      value={formatDateForDateTimeLocalInTimezone(dateRange[1] || globalDateRange[1], selectedTimezone)} 
+                      onChange={(e) => handleDateChange(1, e.target.value)} 
+                      disabled={filtersDisabledEffective} 
+                      className="w-full bg-gray-700/50 border border-gray-600 text-white rounded-md py-2 pl-12 pr-3 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-500 shadow-sm" 
+                    />
+                </div>
+            </div>
+        </div>
 
         <CustomMultiSelect
           label="Log Levels"
@@ -374,57 +541,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           fixedSelected={fixedFilters?.selectedFunctionNames}
         />
 
-        <div>
-            <div className="flex justify-between items-center mb-1">
-                <label className="block text-sm font-medium text-gray-400">Date Range</label>
-                <select
-                    id="timezone-select"
-                    value={selectedTimezone}
-                    onChange={(e) => setSelectedTimezone(e.target.value)}
-                    disabled={isLoading}
-                    className="bg-gray-700 border border-gray-600 text-white rounded-md p-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    title="Select Timezone"
-                >
-                    <option value="local">Local Time</option>
-                    <option value="UTC">UTC</option>
-                    <option value="America/New_York">America/New_York (ET)</option>
-                    <option value="America/Chicago">America/Chicago (CT)</option>
-                    <option value="America/Denver">America/Denver (MT)</option>
-                    <option value="America/Los_Angeles">America/Los_Angeles (PT)</option>
-                    <option value="Europe/London">Europe/London (GMT/BST)</option>
-                    <option value="Europe/Berlin">Europe/Berlin (CET/CEST)</option>
-                    <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
-                </select>
-            </div>
-            <div className="flex flex-col space-y-2">
-                <input 
-                  type="datetime-local" 
-                  step="1"
-                  value={formatDateForDateTimeLocalInTimezone(dateRange[0], selectedTimezone)} 
-                  onChange={(e) => handleDateChange(0, e.target.value)} 
-                  disabled={filtersDisabledEffective} 
-                  className="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" 
-                />
-                <input 
-                  type="datetime-local" 
-                  step="1"
-                  value={formatDateForDateTimeLocalInTimezone(dateRange[1], selectedTimezone)} 
-                  onChange={(e) => handleDateChange(1, e.target.value)} 
-                  disabled={filtersDisabledEffective} 
-                  className="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" 
-                />
-            </div>
-        </div>
       </div>
 
-      <div className="mt-4 pt-4 border-t border-gray-700 space-y-4">
+      <div className="mt-4 pt-4 border-t border-gray-700 space-y-2">
         <button
-          onClick={onNewTab}
+          onClick={() => onNewTab(true)}
           disabled={isLoading}
-          className="w-full bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors text-sm font-medium disabled:bg-gray-600 disabled:cursor-not-allowed"
+          className="w-full bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 transition-colors text-sm font-medium disabled:bg-gray-600 disabled:cursor-not-allowed shadow-md"
         >
-          {filtersDisabled ? 'Create New Tab' : 'Create New Tab from Filters'}
+          {filtersDisabled ? 'Create New Tab' : 'Create Tab from Filters'}
         </button>
+        {!isAllLogs && (
+            <button
+                onClick={() => onNewTab(false)}
+                disabled={isLoading}
+                className="w-full bg-gray-700 text-white px-4 py-2 rounded-md hover:bg-gray-600 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed border border-gray-600 shadow-sm"
+            >
+                Create Empty Tab
+            </button>
+        )}
       </div>
     </aside>
   );

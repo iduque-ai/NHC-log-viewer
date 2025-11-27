@@ -76,8 +76,14 @@ export const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ data }) => {
     let errorCount = 0;
     for (const log of data) {
       levels[log.level] = (levels[log.level] || 0) + 1;
-      if (log.daemon) daemons[log.daemon] = (daemons[log.daemon] || 0) + 1;
-      if (log.functionName) functions[log.functionName] = (functions[log.functionName] || 0) + 1;
+      
+      if (log.daemon && log.daemon.toLowerCase() !== 'unknown') {
+        daemons[log.daemon] = (daemons[log.daemon] || 0) + 1;
+      }
+      
+      if (log.functionName && log.functionName.toLowerCase() !== 'unknown') {
+        functions[log.functionName] = (functions[log.functionName] || 0) + 1;
+      }
 
       if (log.level === LogLevel.ERROR || log.level === LogLevel.CRITICAL) {
         errorCount++;

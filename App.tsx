@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { ungzip } from 'pako';
@@ -195,7 +196,6 @@ const parseLogLine = (line: string, id: number, fileName: string): LogEntry | nu
   }
   
   // 5. Simple/Fallback Match (Handles standard syslog without explicit Level column)
-  // Updated regex to support both "Sep 11..." and ISO timestamps
   const simpleMatch = line.match(/^(?<timestamp>\S+(?:\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)?)\s+(?<hostname>\S+)\s+(?<daemon>[^:\s]+)(?:\[(?<pid>\d+)\])?:\s+(?<message>.*)$/);
   
   if (simpleMatch?.groups) {
@@ -234,6 +234,7 @@ const INITIAL_FILTER_STATE: FilterState = {
   selectedFunctionNames: [],
   dateRange: [null, null],
   keywordQueries: [],
+  keywordMatchMode: 'AND',
   enableKeywordHighlight: false,
   deviceId: '',
 };
@@ -256,6 +257,9 @@ const App: React.FC = () => {
   const [editingTabName, setEditingTabName] = useState('');
   const [scrollToLogId, setScrollToLogId] = useState<number | null>(null);
   const [currentKeywordInput, setCurrentKeywordInput] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [draggedTabIndex, setDraggedTabIndex] = useState<number | null>(null);
+
   const fileIdCounter = useRef(0);
   const logIdCounter = useRef(0);
 
@@ -290,7 +294,6 @@ const App: React.FC = () => {
       } else if (file.name.endsWith('.gz')) {
         try {
             const buffer = await file.arrayBuffer();
-            // Explicitly cast to string to avoid TypeScript 'any' inference errors
             const textContent = ungzip(new Uint8Array(buffer), { to: 'string' }) as string;
             const parsedLogs = textContent
                 .split('\n')
@@ -335,7 +338,6 @@ const App: React.FC = () => {
     let maxDate: Date | null = null;
 
     if (allLogs.length > 0) {
-      // Create a temporary sorted array just to find the date range
       const sortedForDateRange = [...allLogs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
       minDate = sortedForDateRange[0].timestamp;
       maxDate = sortedForDateRange[sortedForDateRange.length - 1].timestamp;
@@ -358,10 +360,9 @@ const App: React.FC = () => {
       ...INITIAL_VIEW_STATE,
     };
 
-    const tab1Id = allLogsTabId + 1; // Ensure unique ID
+    const tab1Id = allLogsTabId + 1; 
     const clonedFilters = JSON.parse(JSON.stringify(initialFiltersForTabs));
 
-    // Rehydrate date strings to Date objects after cloning via JSON.
     if (clonedFilters.dateRange) {
       clonedFilters.dateRange = [
         clonedFilters.dateRange[0] ? new Date(clonedFilters.dateRange[0]) : null,
@@ -380,14 +381,49 @@ const App: React.FC = () => {
     };
     
     setTabs([allLogsTab, tab1]);
-    setActiveTabId(tab1Id); // Make "Tab 1" active
+    setActiveTabId(tab1Id); 
     setIsLoading(false);
   };
   
   const handleAppendFiles = async (files: File[]) => {
     setIsLoading(true);
     const newFileInfos = await processFiles(files);
-    setFileInfos(prev => [...prev, ...newFileInfos]);
+    
+    setFileInfos(prev => {
+        const combinedFileInfos = [...prev, ...newFileInfos];
+        
+        // Calculate new global date range
+        const allLogs = combinedFileInfos.flatMap(f => f.logs);
+        let minDate: Date | null = null;
+        let maxDate: Date | null = null;
+
+        if (allLogs.length > 0) {
+          const sortedForDateRange = [...allLogs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+          minDate = sortedForDateRange[0].timestamp;
+          maxDate = sortedForDateRange[sortedForDateRange.length - 1].timestamp;
+        }
+
+        // Update the "All Logs" tab (assumed to be index 0) to expand its date range
+        setTabs(currentTabs => {
+            if (currentTabs.length === 0) return currentTabs;
+            
+            const updatedTabs = [...currentTabs];
+            const allLogsTab = updatedTabs[0];
+            
+            if (allLogsTab) {
+                updatedTabs[0] = {
+                    ...allLogsTab,
+                    filters: {
+                        ...allLogsTab.filters,
+                        dateRange: [minDate, maxDate]
+                    }
+                };
+            }
+            return updatedTabs;
+        });
+
+        return combinedFileInfos;
+    });
     setIsLoading(false);
   };
 
@@ -404,19 +440,18 @@ const App: React.FC = () => {
 
   const baseLogs = useMemo(() => {
     const allLogs = fileInfos.flatMap(f => f.logs);
-    // Sort logs chronologically. This is the canonical order for the entire dataset.
     allLogs.sort((a, b) => {
         const timeDiff = a.timestamp.getTime() - b.timestamp.getTime();
         if (timeDiff !== 0) return timeDiff;
-        // If timestamps are identical, use the original parse-order ID as a tie-breaker
-        // to ensure a stable sort, as the browser's .sort() is not guaranteed to be stable.
         return a.id - b.id;
     });
-    
-    // The logs now have their original, stable parse-time ID and are sorted chronologically.
-    // This sorted array is the canonical source of truth for all views.
     return allLogs;
   }, [fileInfos]);
+
+  const globalDateRange = useMemo<[Date | null, Date | null]>(() => {
+      if (baseLogs.length === 0) return [null, null];
+      return [baseLogs[0].timestamp, baseLogs[baseLogs.length - 1].timestamp];
+  }, [baseLogs]);
 
   const activeTab = useMemo(() => tabs.find(tab => tab.id === activeTabId), [tabs, activeTabId]);
 
@@ -459,16 +494,14 @@ const App: React.FC = () => {
         if (tab.id === activeTabId) {
             const currentLogsPerPage = tab.logsPerPage || 500;
             const currentPage = tab.currentPage || 1;
-            // Calculate index of the first log on the current page (0-based)
             const firstLogIndex = (currentPage - 1) * currentLogsPerPage;
-            // Calculate which page this log will be on with the new page size
             const newPage = Math.floor(firstLogIndex / newLogsPerPage) + 1;
             
             return { 
                 ...tab, 
                 logsPerPage: newLogsPerPage, 
                 currentPage: newPage,
-                scrollTop: 0 // Reset scroll because exact pixel position will change
+                scrollTop: 0 
             };
         }
         return tab;
@@ -476,16 +509,22 @@ const App: React.FC = () => {
     );
   }, [activeTabId]);
 
-  const handleNewTab = () => {
-    const activeTab = tabs.find(tab => tab.id === activeTabId);
-    // The new fixed filters are a deep copy of the active tab's current filters.
-    const newFixedFilters = activeTab ? JSON.parse(JSON.stringify(activeTab.filters)) : { ...INITIAL_FILTER_STATE };
+  const handleNewTab = (withFilters: boolean) => {
+    let newFilters: FilterState;
+
+    if (withFilters) {
+        const activeTab = tabs.find(tab => tab.id === activeTabId);
+        // The new filters are a deep copy of the active tab's current filters.
+        newFilters = activeTab ? JSON.parse(JSON.stringify(activeTab.filters)) : { ...INITIAL_FILTER_STATE, dateRange: globalDateRange };
+    } else {
+        newFilters = { ...INITIAL_FILTER_STATE, dateRange: globalDateRange };
+    }
     
-    // FIX: Rehydrate date strings to Date objects after cloning via JSON.
-    if (newFixedFilters.dateRange) {
-      newFixedFilters.dateRange = [
-        newFixedFilters.dateRange[0] ? new Date(newFixedFilters.dateRange[0]) : null,
-        newFixedFilters.dateRange[1] ? new Date(newFixedFilters.dateRange[1]) : null
+    // Rehydrate date strings to Date objects after cloning via JSON.
+    if (newFilters.dateRange) {
+      newFilters.dateRange = [
+        newFilters.dateRange[0] ? new Date(newFilters.dateRange[0]) : null,
+        newFilters.dateRange[1] ? new Date(newFilters.dateRange[1]) : null
       ];
     }
 
@@ -500,8 +539,8 @@ const App: React.FC = () => {
     const newTab: LogTab = {
       id: newTabId,
       name: `Tab ${nextTabNumber}`,
-      filters: newFixedFilters,
-      fixedFilters: newFixedFilters,
+      filters: newFilters,
+      fixedFilters: undefined, // New tabs are always editable
       currentPage: 1,
       scrollTop: 0,
       ...INITIAL_VIEW_STATE,
@@ -511,7 +550,6 @@ const App: React.FC = () => {
   };
   
   const handleCloseTab = (tabIdToClose: number) => {
-    // Prevent closing the first ("All Logs") tab
     if (tabIdToClose === tabs[0]?.id) return;
     
     const tabIndex = tabs.findIndex(tab => tab.id === tabIdToClose);
@@ -551,6 +589,83 @@ const App: React.FC = () => {
     setCurrentKeywordInput(prev => (prev ? prev.trim() + ' ' : '') + keyword);
   }, []);
 
+  const handleResetDateRange = useCallback(() => {
+      if (activeTabId === null) return;
+      handleFilterChange({ dateRange: globalDateRange });
+  }, [activeTabId, globalDateRange, handleFilterChange]);
+
+  const handleExportFilters = useCallback(() => {
+      if (!activeTab) return;
+      const filtersToExport = { ...activeTab.filters };
+      // Exclude dateRange from export
+      filtersToExport.dateRange = [null, null];
+      
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(filtersToExport, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `nhc_filters_${activeTab.name.replace(/\s+/g, '_')}.json`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+  }, [activeTab]);
+
+  const handleImportFilters = useCallback((file: File) => {
+      if (activeTabId === null) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+          try {
+              const json = JSON.parse(event.target?.result as string);
+              // Sanitize and validate logic could go here, for now we merge safely
+              const importedFilters: Partial<FilterState> = {};
+              
+              if (Array.isArray(json.selectedLevels)) importedFilters.selectedLevels = json.selectedLevels;
+              if (Array.isArray(json.selectedDaemons)) importedFilters.selectedDaemons = json.selectedDaemons;
+              if (Array.isArray(json.selectedModules)) importedFilters.selectedModules = json.selectedModules;
+              if (Array.isArray(json.selectedFunctionNames)) importedFilters.selectedFunctionNames = json.selectedFunctionNames;
+              if (Array.isArray(json.keywordQueries)) importedFilters.keywordQueries = json.keywordQueries;
+              if (json.keywordMatchMode === 'AND' || json.keywordMatchMode === 'OR') importedFilters.keywordMatchMode = json.keywordMatchMode;
+              if (typeof json.enableKeywordHighlight === 'boolean') importedFilters.enableKeywordHighlight = json.enableKeywordHighlight;
+
+              handleFilterChange(importedFilters);
+          } catch (e) {
+              console.error("Failed to parse filter JSON", e);
+              alert("Invalid JSON file.");
+          }
+      };
+      reader.readAsText(file);
+  }, [activeTabId, handleFilterChange]);
+
+  // Drag and Drop Logic
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (index === 0) {
+        e.preventDefault(); // Cannot drag All Logs
+        return;
+    }
+    setDraggedTabIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', index.toString());
+    // Adding a transparent class to the drag source can be done via state if needed, but simple D&D is okay
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
+    e.preventDefault();
+    if (draggedTabIndex === null || dropIndex === 0) return; // Cannot drop on All Logs
+    
+    if (draggedTabIndex === dropIndex) return;
+
+    const newTabs = [...tabs];
+    const [movedTab] = newTabs.splice(draggedTabIndex, 1);
+    newTabs.splice(dropIndex, 0, movedTab);
+    
+    setTabs(newTabs);
+    setDraggedTabIndex(null);
+  };
+
   const { allDaemons, allModules, allFunctionNames } = useMemo(() => {
     const daemons = new Set<string>();
     const modules = new Set<string>();
@@ -572,12 +687,23 @@ const App: React.FC = () => {
     if (!activeTabFilters) return [];
     
     return baseLogs.filter(log => {
-      const { selectedLevels, selectedDaemons, selectedModules, selectedFunctionNames, dateRange, keywordQueries } = activeTabFilters;
+      const { selectedLevels, selectedDaemons, selectedModules, selectedFunctionNames, dateRange, keywordQueries, keywordMatchMode } = activeTabFilters;
       if (selectedLevels.length > 0 && !selectedLevels.includes(log.level)) return false;
       if (selectedDaemons.length > 0 && !selectedDaemons.includes(log.daemon)) return false;
       if (selectedModules.length > 0 && !selectedModules.includes(log.module)) return false;
       if (selectedFunctionNames.length > 0 && !selectedFunctionNames.includes(log.functionName)) return false;
-      if (keywordQueries.length > 0 && !keywordQueries.every(q => evaluateKeywordQuery(q, log.message))) return false;
+      
+      if (keywordQueries.length > 0) {
+          const check = (q: string) => evaluateKeywordQuery(q, log.message);
+          if (keywordMatchMode === 'OR') {
+              // ANY must match (if queries exist)
+              if (!keywordQueries.some(check)) return false;
+          } else {
+              // ALL (AND) must match
+              if (!keywordQueries.every(check)) return false;
+          }
+      }
+
       const logTime = log.timestamp.getTime();
       if (dateRange[0] && logTime < dateRange[0].getTime()) return false;
       if (dateRange[1] && logTime > dateRange[1].getTime()) return false;
@@ -591,7 +717,8 @@ const App: React.FC = () => {
       activeTabFilters?.selectedFunctionNames,
       activeTabFilters?.dateRange?.[0],
       activeTabFilters?.dateRange?.[1],
-      activeTabFilters?.keywordQueries
+      activeTabFilters?.keywordQueries,
+      activeTabFilters?.keywordMatchMode
   ]);
 
   useEffect(() => {
@@ -602,13 +729,10 @@ const App: React.FC = () => {
       const updatedTabs = currentTabs.map(tab => {
         const { filters } = tab;
   
-        // If only one option exists, it becomes the selection. Otherwise, filter existing selections.
-        // Defensive check: use empty array fallback for potential undefined filters during state transitions
         const newSelectedDaemons = allDaemons.length === 1 ? [...allDaemons] : (filters.selectedDaemons || []).filter(d => allDaemons.includes(d));
         const newSelectedModules = allModules.length === 1 ? [...allModules] : (filters.selectedModules || []).filter(m => allModules.includes(m));
         const newSelectedFunctionNames = allFunctionNames.length === 1 ? [...allFunctionNames] : (filters.selectedFunctionNames || []).filter(f => allFunctionNames.includes(f));
         
-        // Using stringify for simple array comparison
         if (
           JSON.stringify(newSelectedDaemons) !== JSON.stringify(filters.selectedDaemons || []) ||
           JSON.stringify(newSelectedModules) !== JSON.stringify(filters.selectedModules || []) ||
@@ -637,80 +761,102 @@ const App: React.FC = () => {
     <div className="flex h-screen bg-gray-800 text-white font-sans overflow-hidden">
       {fileInfos.length > 0 && activeTab ? (
         <>
-          <Sidebar
-            filterState={activeTab.filters}
-            fixedFilters={activeTab.fixedFilters}
-            onFilterChange={handleFilterChange}
-            allDaemons={allDaemons}
-            allModules={allModules}
-            allFunctionNames={allFunctionNames}
-            onNewTab={handleNewTab}
-            isLoading={isLoading}
-            fileInfos={fileInfos}
-            onAppendFiles={handleAppendFiles}
-            onRemoveFile={handleRemoveFile}
-            selectedTimezone={selectedTimezone}
-            setSelectedTimezone={setSelectedTimezone}
-            filtersDisabled={activeTab.id === tabs[0]?.id}
-            currentKeywordInput={currentKeywordInput}
-            onCurrentKeywordInputChange={setCurrentKeywordInput}
-          />
+          {isSidebarOpen && (
+              <Sidebar
+                filterState={activeTab.filters}
+                fixedFilters={activeTab.fixedFilters}
+                onFilterChange={handleFilterChange}
+                allDaemons={allDaemons}
+                allModules={allModules}
+                allFunctionNames={allFunctionNames}
+                onNewTab={handleNewTab}
+                isLoading={isLoading}
+                fileInfos={fileInfos}
+                onAppendFiles={handleAppendFiles}
+                onRemoveFile={handleRemoveFile}
+                selectedTimezone={selectedTimezone}
+                setSelectedTimezone={setSelectedTimezone}
+                filtersDisabled={activeTab.id === tabs[0]?.id}
+                currentKeywordInput={currentKeywordInput}
+                onCurrentKeywordInputChange={setCurrentKeywordInput}
+                globalDateRange={globalDateRange}
+                onResetDateRange={handleResetDateRange}
+                onExportFilters={handleExportFilters}
+                onImportFilters={handleImportFilters}
+                isAllLogs={activeTab.id === tabs[0]?.id}
+              />
+          )}
           <main className="flex-1 flex flex-col min-w-0">
             <div className="flex-shrink-0 bg-gray-900 border-b border-gray-700 flex items-center justify-between">
-              <div className="flex overflow-x-auto">
-                {tabs.map((tab, index) => {
-                  const isAllLogsTab = index === 0;
-                  const isActive = activeTabId === tab.id;
+              <div className="flex items-center">
+                  <button 
+                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                    className="p-3 text-gray-400 hover:text-white border-r border-gray-700 h-full"
+                    title={isSidebarOpen ? "Collapse Sidebar" : "Expand Sidebar"}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={isSidebarOpen ? "M4 6h16M4 12h16M4 18h16" : "M4 6h16M4 12h16M4 18h16"} />
+                    </svg>
+                  </button>
+                  <div className="flex overflow-x-auto">
+                    {tabs.map((tab, index) => {
+                      const isAllLogsTab = index === 0;
+                      const isActive = activeTabId === tab.id;
 
-                  let tabClasses = 'flex items-center px-4 py-2 border-r border-gray-700 flex-shrink-0 whitespace-nowrap transition-colors ';
-                  if (isActive) {
-                    tabClasses += 'bg-gray-800 text-white';
-                  } else {
-                    if (isAllLogsTab) {
-                      tabClasses += 'bg-gray-950 text-gray-400 hover:bg-gray-700 hover:text-white';
-                    } else {
-                      tabClasses += 'bg-gray-900 text-white hover:bg-gray-700';
-                    }
-                  }
-                  tabClasses += isAllLogsTab ? ' cursor-default' : ' cursor-pointer';
+                      let tabClasses = 'flex items-center px-4 py-2 border-r border-gray-700 flex-shrink-0 whitespace-nowrap transition-colors ';
+                      if (isActive) {
+                        tabClasses += 'bg-gray-800 text-white';
+                      } else {
+                        if (isAllLogsTab) {
+                          tabClasses += 'bg-gray-950 text-gray-400 hover:bg-gray-700 hover:text-white';
+                        } else {
+                          tabClasses += 'bg-gray-900 text-white hover:bg-gray-700';
+                        }
+                      }
+                      tabClasses += isAllLogsTab ? ' cursor-default' : ' cursor-pointer';
 
-                  return (
-                    <div
-                      key={tab.id}
-                      onClick={() => editingTabId !== tab.id && setActiveTabId(tab.id)}
-                      onDoubleClick={() => {
-                        if (isAllLogsTab) return;
-                        setEditingTabId(tab.id);
-                        setEditingTabName(tab.name);
-                      }}
-                      className={tabClasses}
-                    >
-                      {isAllLogsTab && (
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
-                        </svg>
-                      )}
-                      {editingTabId === tab.id ? (
-                        <input
-                          type="text"
-                          value={editingTabName}
-                          onChange={e => setEditingTabName(e.target.value)}
-                          onBlur={() => handleRenameTab(tab.id, editingTabName)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') handleRenameTab(tab.id, editingTabName);
-                            if (e.key === 'Escape') setEditingTabId(null);
+                      return (
+                        <div
+                          key={tab.id}
+                          draggable={!isAllLogsTab}
+                          onDragStart={(e) => handleDragStart(e, index)}
+                          onDragOver={(e) => handleDragOver(e, index)}
+                          onDrop={(e) => handleDrop(e, index)}
+                          onClick={() => editingTabId !== tab.id && setActiveTabId(tab.id)}
+                          onDoubleClick={() => {
+                            if (isAllLogsTab) return;
+                            setEditingTabId(tab.id);
+                            setEditingTabName(tab.name);
                           }}
-                          autoFocus
-                          onFocus={e => e.target.select()}
-                          className="bg-gray-700 text-white text-sm border border-gray-600 focus:ring-1 focus:ring-blue-500 rounded-sm px-1 mr-2 max-w-xs"
-                        />
-                      ) : (
-                        <span className="text-sm mr-2 truncate max-w-xs" title={tab.name}>{tab.name}</span>
-                      )}
-                      {!isAllLogsTab && <button onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.id); }} className="text-gray-500 hover:text-white flex-shrink-0">&times;</button>}
-                    </div>
-                  );
-                })}
+                          className={tabClasses}
+                        >
+                          {isAllLogsTab && (
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+                            </svg>
+                          )}
+                          {editingTabId === tab.id ? (
+                            <input
+                              type="text"
+                              value={editingTabName}
+                              onChange={e => setEditingTabName(e.target.value)}
+                              onBlur={() => handleRenameTab(tab.id, editingTabName)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') handleRenameTab(tab.id, editingTabName);
+                                if (e.key === 'Escape') setEditingTabId(null);
+                              }}
+                              autoFocus
+                              onFocus={e => e.target.select()}
+                              className="bg-gray-700 text-white text-sm border border-gray-600 focus:ring-1 focus:ring-blue-500 rounded-sm px-1 mr-2 max-w-xs"
+                            />
+                          ) : (
+                            <span className="text-sm mr-2 truncate max-w-xs" title={tab.name}>{tab.name}</span>
+                          )}
+                          {!isAllLogsTab && <button onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.id); }} className="text-gray-500 hover:text-white flex-shrink-0">&times;</button>}
+                        </div>
+                      );
+                    })}
+                  </div>
               </div>
             </div>
             <div className="flex-grow min-h-0">

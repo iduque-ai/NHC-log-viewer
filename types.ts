@@ -36,6 +36,7 @@ export interface FilterState {
   selectedFunctionNames: string[];
   dateRange: [Date | null, Date | null];
   keywordQueries: string[];
+  keywordMatchMode: 'AND' | 'OR';
   enableKeywordHighlight: boolean;
   deviceId: string;
 }
