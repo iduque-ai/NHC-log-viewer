@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^0.1.0",
     "@mlc-ai/web-llm": "^0.2.72",
     "@vercel/analytics": "^1.4.1",
     "jszip": "^3.10.1",
