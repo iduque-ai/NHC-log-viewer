@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { LogEntry, LogLevel } from '../types.ts';
 import { exportToCsv, exportToTxt, formatTimestamp, extractKeywordsFromQuery } from '../utils/helpers.ts';
@@ -40,6 +41,17 @@ const levelColorMap: Record<LogLevel, string> = {
   [LogLevel.ERROR]: 'bg-red-600 text-red-100',
   [LogLevel.CRITICAL]: 'bg-purple-600 text-purple-100',
   [LogLevel.UNKNOWN]: 'bg-gray-400 text-gray-900',
+};
+
+const levelBorderMap: Record<LogLevel, string> = {
+  [LogLevel.DEBUG]: 'border-gray-600',
+  [LogLevel.INFO]: 'border-blue-600',
+  [LogLevel.NOTICE]: 'border-sky-600',
+  [LogLevel.VERBOSE]: 'border-teal-600',
+  [LogLevel.WARNING]: 'border-yellow-600',
+  [LogLevel.ERROR]: 'border-red-600',
+  [LogLevel.CRITICAL]: 'border-purple-600',
+  [LogLevel.UNKNOWN]: 'border-gray-500',
 };
 
 const ALL_COLUMNS: (keyof Omit<LogEntry, 'id' | 'timestamp'>)[] = ['level', 'daemon', 'hostname', 'pid', 'module', 'message', 'functionName'];
@@ -153,8 +165,24 @@ export const LogTable: React.FC<LogTableProps> = ({
     }
     return initialCols;
   });
+
+  // Track previous count to intelligently toggle daemon column visibility
+  const prevTotalDaemonCount = useRef(totalDaemonCount);
+
+  useEffect(() => {
+    // If we went from single/zero daemons to multiple, automatically show the column
+    if (totalDaemonCount > 1 && prevTotalDaemonCount.current <= 1) {
+        setVisibleColumns(prev => ({ ...prev, daemon: true }));
+    } 
+    // If we went from multiple to single/zero, automatically hide it to save space
+    else if (totalDaemonCount <= 1 && prevTotalDaemonCount.current > 1) {
+        setVisibleColumns(prev => ({ ...prev, daemon: false }));
+    }
+    prevTotalDaemonCount.current = totalDaemonCount;
+  }, [totalDaemonCount]);
+
   const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null);
-  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  const rowRefs = useRef(new Map<number, HTMLElement>());
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const scrollRequestRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -652,12 +680,85 @@ export const LogTable: React.FC<LogTableProps> = ({
     ));
   }, [paginatedData, visibleColumns, highlightedRowId, selectedTimezone, keywordsToHighlight, onRowDoubleClick, onKeywordClick]);
 
+  const mobileRows = useMemo(() => {
+    if (paginatedData.length === 0) {
+        return (
+            <div className="text-center py-6 text-gray-400 text-xs">
+                No logs match the current filters.
+            </div>
+        );
+    }
+    return paginatedData.map((log) => (
+       <div 
+          key={log.id}
+          ref={el => {
+            if (el) rowRefs.current.set(log.id, el);
+            else rowRefs.current.delete(log.id);
+          }}
+          onDoubleClick={onRowDoubleClick ? () => onRowDoubleClick(log) : undefined}
+          className={`
+            bg-gray-800 rounded-md p-3 mb-2 border-l-4 ${levelBorderMap[log.level]}
+            shadow-sm hover:bg-gray-750 transition-colors
+            ${highlightedRowId === log.id ? 'ring-2 ring-blue-500 bg-gray-700' : ''}
+          `}
+       >
+          <div className="flex justify-between items-start mb-2">
+              <span className="text-[10px] text-gray-400 font-mono">
+                  {formatTimestamp(log.timestamp, selectedTimezone)}
+              </span>
+              <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded-sm ${levelColorMap[log.level]}`}>
+                  {log.level}
+              </span>
+          </div>
+          
+          <div className="text-xs text-gray-200 font-mono break-all leading-relaxed mb-2">
+              {keywordsToHighlight.length > 0 ? highlightKeywords(log.message, keywordsToHighlight, onKeywordClick) : log.message}
+          </div>
+
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-gray-500 border-t border-gray-700/50 pt-2">
+              {visibleColumns.daemon && (
+                  <div className="flex items-center space-x-1">
+                      <span className="font-semibold text-gray-500">Daemon:</span>
+                      <span className="text-gray-400">{log.daemon}</span>
+                  </div>
+              )}
+               {visibleColumns.hostname && (
+                  <div className="flex items-center space-x-1">
+                      <span className="font-semibold text-gray-500">Host:</span>
+                      <span className="text-gray-400">{log.hostname}</span>
+                  </div>
+              )}
+               {visibleColumns.pid && (
+                  <div className="flex items-center space-x-1">
+                      <span className="font-semibold text-gray-500">PID:</span>
+                      <span className="text-gray-400">{log.pid}</span>
+                  </div>
+              )}
+               {visibleColumns.module && log.module && log.module !== 'unknown' && (
+                  <div className="flex items-center space-x-1">
+                      <span className="font-semibold text-gray-500">Mod:</span>
+                      <span className="text-gray-400">{log.module}</span>
+                  </div>
+              )}
+               {visibleColumns.functionName && log.functionName && log.functionName !== 'unknown' && (
+                  <div className="flex items-center space-x-1">
+                      <span className="font-semibold text-gray-500">Func:</span>
+                      <span className="text-gray-400">{log.functionName}</span>
+                  </div>
+              )}
+          </div>
+       </div>
+    ));
+  }, [paginatedData, visibleColumns, highlightedRowId, selectedTimezone, keywordsToHighlight, onRowDoubleClick, onKeywordClick]);
+
   return (
     <div className="p-2 flex flex-col h-full">
       <div className="flex justify-between items-center mb-2">
         <p className="text-gray-400 text-xs">Showing <span className="font-bold text-white">{data.length.toLocaleString()}</span> of <span className="font-bold text-white">{totalCount.toLocaleString()}</span> logs</p>
         <div className="flex items-center space-x-2">
-            <ColumnSelector visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} totalDaemonCount={totalDaemonCount} />
+            <div className="hidden md:block">
+                <ColumnSelector visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} totalDaemonCount={totalDaemonCount} />
+            </div>
             
             <div className="pl-2 border-l border-gray-700 flex items-center space-x-1">
                 <button
@@ -676,8 +777,11 @@ export const LogTable: React.FC<LogTableProps> = ({
         </div>
       </div>
 
-      <div ref={tableContainerRef} onScroll={handleScroll} className="flex-grow overflow-auto bg-gray-900 rounded-lg">
-        <table className="min-w-full divide-y divide-gray-700">
+      {/* Main Scroll Container shared between Desktop Table and Mobile List */}
+      <div ref={tableContainerRef} onScroll={handleScroll} className="flex-grow overflow-auto bg-gray-900 rounded-lg border border-gray-800 md:border-none">
+        
+        {/* Desktop View */}
+        <table className="hidden md:table min-w-full divide-y divide-gray-700">
           <thead className="bg-gray-800 sticky top-0 z-10">
             <tr>
               <th scope="col" className={`px-2 py-2 text-left text-xs font-medium text-gray-300 uppercase tracking-wider ${COLUMN_WIDTHS.timestamp}`}>Timestamp</th>
@@ -690,6 +794,11 @@ export const LogTable: React.FC<LogTableProps> = ({
             {tableRows}
           </tbody>
         </table>
+
+        {/* Mobile View */}
+        <div className="md:hidden p-2">
+            {mobileRows}
+        </div>
       </div>
 
       {data.length > 0 && (
@@ -714,22 +823,22 @@ export const LogTable: React.FC<LogTableProps> = ({
 
           {/* Center: Find in Tab */}
           <div className="z-0 w-full sm:w-auto flex justify-center order-1 sm:order-2 sm:absolute sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2">
-              <div className="flex items-center bg-gray-800 rounded-md border border-gray-600 p-0.5 shadow-sm">
-                  <div className="pl-1 pr-0.5 text-gray-400">
+              <div className="flex items-center bg-gray-800 rounded-md border border-gray-600 p-0.5 shadow-sm w-full sm:w-auto">
+                  <div className="pl-1 pr-0.5 text-gray-400 flex-shrink-0">
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                   </div>
                   <input 
                       ref={searchInputRef}
                       type="text" 
-                      placeholder="Search (Ctrl+F)" 
-                      className="bg-transparent border-none text-white text-xs focus:ring-0 w-24 sm:w-48 placeholder-gray-500 py-0.5"
+                      placeholder="Search" 
+                      className="bg-transparent border-none text-white text-xs focus:ring-0 w-full sm:w-48 placeholder-gray-500 py-0.5 min-w-0"
                       value={searchQuery}
                       onChange={handleSearchChange}
                       onKeyDown={handleSearchKeyDown}
                   />
 
                   {/* Search Options */}
-                  <div className="flex items-center space-x-0.5 border-r border-gray-700 pr-1 mr-1">
+                  <div className="flex items-center space-x-0.5 border-r border-gray-700 pr-1 mr-1 flex-shrink-0">
                       <button
                           onClick={() => onSearchMatchCaseChange(!searchMatchCase)}
                           className={`p-0.5 rounded text-[10px] font-medium w-5 h-5 flex items-center justify-center transition-colors ${searchMatchCase ? 'bg-gray-600 text-white' : 'text-gray-400 hover:bg-gray-700 hover:text-gray-300'}`}
@@ -753,25 +862,27 @@ export const LogTable: React.FC<LogTableProps> = ({
                       </button>
                   </div>
 
-                  <span className="text-[10px] text-gray-500 px-1 min-w-[2.5rem] text-center select-none tabular-nums">
+                  <span className="text-[10px] text-gray-500 px-1 min-w-[2.5rem] text-center select-none tabular-nums flex-shrink-0">
                       {matchingIndices.length > 0 ? `${currentMatchPos + 1}/${matchingIndices.length}` : (searchQuery ? '0/0' : '')}
                   </span>
-                  <button 
-                      onClick={handlePrevMatch}
-                      disabled={currentMatchPos === 0 || matchingIndices.length === 0}
-                      className={`p-0.5 rounded ${currentMatchPos === 0 || matchingIndices.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
-                      title="Find Previous (Shift+Enter / Alt+Up)"
-                  >
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7"></path></svg>
-                  </button>
-                  <button 
-                      onClick={handleNextMatch}
-                      disabled={currentMatchPos === matchingIndices.length - 1 || matchingIndices.length === 0}
-                      className={`p-0.5 rounded ${currentMatchPos === matchingIndices.length - 1 || matchingIndices.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
-                      title="Find Next (Enter / Alt+Down)"
-                  >
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                  </button>
+                  <div className="flex space-x-0.5 flex-shrink-0">
+                    <button 
+                        onClick={handlePrevMatch}
+                        disabled={currentMatchPos === 0 || matchingIndices.length === 0}
+                        className={`p-0.5 rounded ${currentMatchPos === 0 || matchingIndices.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        title="Find Previous (Shift+Enter / Alt+Up)"
+                    >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7"></path></svg>
+                    </button>
+                    <button 
+                        onClick={handleNextMatch}
+                        disabled={currentMatchPos === matchingIndices.length - 1 || matchingIndices.length === 0}
+                        className={`p-0.5 rounded ${currentMatchPos === matchingIndices.length - 1 || matchingIndices.length === 0 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}
+                        title="Find Next (Enter / Alt+Down)"
+                    >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </button>
+                  </div>
               </div>
           </div>
 
