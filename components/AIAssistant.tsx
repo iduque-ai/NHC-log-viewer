@@ -238,8 +238,27 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   
   // Default to Flash as it's balanced
   const [modelTier, setModelTier] = useState<string>('gemini-2.5-flash');
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+  const [userApiKey, setUserApiKey] = useState('');
+  const [tempApiKey, setTempApiKey] = useState('');
+
+  // Load API Key from local storage
+  useEffect(() => {
+    const storedKey = localStorage.getItem('nhc_log_viewer_api_key');
+    if (storedKey) {
+        setUserApiKey(storedKey);
+        setTempApiKey(storedKey);
+    }
+  }, []);
+
+  const handleSaveApiKey = () => {
+    localStorage.setItem('nhc_log_viewer_api_key', tempApiKey.trim());
+    setUserApiKey(tempApiKey.trim());
+    setShowSettings(false);
+  };
 
   // Ref to hold the WebLLM engine instance to avoid re-init
   const webLlmEngineRef = useRef<any>(null);
@@ -574,14 +593,14 @@ User Question: ${userText}
         return;
     }
 
-    // Use process.env.API_KEY exclusively as per guidelines
-    const apiKey = process.env.API_KEY;
+    // Fallback to user-provided key if process.env.API_KEY is missing
+    const apiKey = process.env.API_KEY || userApiKey;
 
     if (!apiKey) {
       setMessages(prev => [...prev, { 
           id: Date.now().toString(), 
           role: 'model', 
-          text: 'Error: API Key is missing. Ensure process.env.API_KEY is properly configured in your environment.', 
+          text: 'Error: API Key is missing. Please click the settings (gear icon) in the top right to enter your Gemini API key.', 
           isError: true 
       }]);
       return;
@@ -593,7 +612,7 @@ User Question: ${userText}
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: apiKey });
+      const ai = new GoogleGenAI({ apiKey });
       // Use the selected model tier directly as the model name
       const modelName = modelTier;
       const model = ai.models;
@@ -688,7 +707,7 @@ User Question: ${userText}
               }
           }
           if (msg.includes('API_KEY')) {
-              errorMessage = "Invalid API Key. Please check your environment configuration.";
+              errorMessage = "Invalid API Key. Please check your settings.";
           }
       }
       
@@ -737,7 +756,6 @@ User Question: ${userText}
 
   return (
     <div className="fixed inset-y-0 right-0 z-40 w-full md:w-96 bg-gray-800 shadow-2xl border-l border-gray-700 flex flex-col transform transition-transform duration-300 ease-in-out">
-      
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-900">
         <div className="flex items-center space-x-2">
@@ -764,6 +782,13 @@ User Question: ${userText}
             </div>
         </div>
         <div className="flex items-center space-x-1">
+             <button
+                 onClick={() => setShowSettings(true)}
+                 className="text-gray-400 hover:text-white p-1 rounded-md hover:bg-gray-700"
+                 title="Settings"
+             >
+                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+             </button>
              <button 
                 onClick={handleResetChat} 
                 className="text-gray-400 hover:text-red-400 p-1 rounded-md hover:bg-gray-700"
@@ -776,6 +801,47 @@ User Question: ${userText}
             </button>
         </div>
       </div>
+      
+      {/* Settings Modal Overlay */}
+      {showSettings && (
+          <div className="absolute inset-0 z-50 bg-gray-900/95 flex items-center justify-center p-4">
+              <div className="bg-gray-800 rounded-lg border border-gray-700 shadow-2xl p-6 w-full max-w-sm">
+                  <h3 className="text-lg font-bold text-white mb-4">Settings</h3>
+                  
+                  <div className="mb-4">
+                      <label className="block text-xs font-medium text-gray-400 mb-1">
+                          Gemini API Key
+                      </label>
+                      <input
+                          type="password"
+                          value={tempApiKey}
+                          onChange={(e) => setTempApiKey(e.target.value)}
+                          placeholder="AIza..."
+                          className="w-full bg-gray-900 border border-gray-600 text-white rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <p className="text-[10px] text-gray-500 mt-2">
+                          Your key is stored locally in your browser.
+                          Leave blank to use the system default key (if configured).
+                      </p>
+                  </div>
+
+                  <div className="flex justify-end space-x-2">
+                      <button
+                          onClick={() => setShowSettings(false)}
+                          className="px-3 py-2 text-xs font-medium text-gray-400 hover:text-white transition-colors"
+                      >
+                          Cancel
+                      </button>
+                      <button
+                          onClick={handleSaveApiKey}
+                          className="px-4 py-2 text-xs font-medium bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                      >
+                          Save
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
       
       {/* Quick Actions */}
       <div className="p-3 grid grid-cols-2 gap-2 border-b border-gray-700 bg-gray-800/50">
