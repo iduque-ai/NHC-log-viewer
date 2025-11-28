@@ -1,4 +1,9 @@
 
+declare namespace NodeJS {
+  interface ProcessEnv {
+    API_KEY?: string;
+  }
+}
 
 declare module "@google/genai" {
   export class GoogleGenAI {
