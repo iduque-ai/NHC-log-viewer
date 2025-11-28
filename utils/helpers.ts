@@ -1,3 +1,4 @@
+
 import { LogEntry, LogLevel } from '../types.ts';
 
 // FIX: Corrected TypeScript errors on lines 13 and 20 related to 'fractionalSecondDigits'.
@@ -156,11 +157,17 @@ export const exportToTxt = (data: LogEntry[], timezone: string, visibleColumns: 
 // Extracts searchable keywords from a boolean query string for highlighting.
 export const extractKeywordsFromQuery = (query: string): string[] => {
     if (!query) return [];
-    // Remove operators and parentheses, then split into words.
-    const cleanedQuery = query.replace(/&&|\|\||!/g, ' ')
-                              .replace(/[()]/g, ' ');
-    return cleanedQuery.split(/\s+/)
-                       .filter(kw => kw.trim() !== '');
+    // Regex to capture quoted strings or words, ignoring operators
+    const regex = /"(?:[^"\\]|\\.)*"|[^\s()&|!]+/g;
+    const matches = query.match(regex) || [];
+    
+    return matches.map(m => {
+        // Strip quotes if present
+        if (m.startsWith('"') && m.endsWith('"')) {
+            return m.slice(1, -1).replace(/\\"/g, '"');
+        }
+        return m;
+    });
 };
 
 const precedence: { [key: string]: number } = { '||': 1, '&&': 2, '!': 3 };
@@ -232,7 +239,12 @@ const evaluatePostfix = (postfix: string[], message: string): boolean => {
             const a = stack.pop()!;
             stack.push(!a);
         } else { // is operand
-            stack.push(lowerCaseMessage.includes(token.toLowerCase()));
+            let searchTerm = token;
+            // Handle quoted literals: strip quotes for comparison
+            if (searchTerm.startsWith('"') && searchTerm.endsWith('"')) {
+                searchTerm = searchTerm.slice(1, -1).replace(/\\"/g, '"');
+            }
+            stack.push(lowerCaseMessage.includes(searchTerm.toLowerCase()));
         }
     }
 
@@ -246,11 +258,12 @@ export const evaluateKeywordQuery = (query: string, message: string): boolean =>
     }
 
     try {
-        const tokens = query
-            .replace(/(&&|\|\||!|\(|\))/g, ' $1 ') // Add spaces around operators
-            .trim()
-            .split(/\s+/)
-            .filter(Boolean);
+        // Advanced Tokenizer:
+        // 1. Match double-quoted strings: "(?:[^"\\]|\\.)*"
+        // 2. Match operators: &&, ||, !, (, )
+        // 3. Match unquoted words/symbols: [^\s()&|!]+
+        const regex = /"(?:[^"\\]|\\.)*"|&&|\|\||!|\(|\)|[^\s()&|!]+/g;
+        const tokens = query.match(regex) || [];
 
         const hasOperands = tokens.some(t => ![...operators, '(', ')'].includes(t));
         if (!hasOperands) {

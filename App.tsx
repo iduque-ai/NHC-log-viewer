@@ -5,6 +5,7 @@ import { ungzip } from 'pako';
 import { FileUpload } from './components/FileUpload.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
 import { LogViewer } from './components/LogViewer.tsx';
+import { AIAssistant } from './components/AIAssistant.tsx';
 import { LogEntry, FilterState, LogTab, LogLevel, FileInfo } from './types.ts';
 import { evaluateKeywordQuery } from './utils/helpers.ts';
 
@@ -276,6 +277,7 @@ const INITIAL_FILTER_STATE: FilterState = {
 };
 
 const INITIAL_VIEW_STATE = {
+  viewMode: 'data' as const,
   logsPerPage: 500,
   searchQuery: '',
   searchMatchCase: false,
@@ -296,6 +298,7 @@ const App: React.FC = () => {
   // Initialize sidebar based on screen width
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [draggedTabIndex, setDraggedTabIndex] = useState<number | null>(null);
+  const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
 
   const fileIdCounter = useRef(0);
   const logIdCounter = useRef(0);
@@ -499,6 +502,77 @@ const App: React.FC = () => {
     ));
   }, [activeTabId]);
   
+  const handleAICreateTab = useCallback((filters: Partial<FilterState>, reset?: boolean) => {
+      // Logic: Create a new tab specifically for AI results.
+      // If a tab named "AI Filter Result" exists, we could reuse it, or just create new ones.
+      // Let's create a new one to be safe and allow comparison.
+      
+      const newTabId = Date.now();
+      // Ensure we have a valid date range from global if not provided
+      const baseDateRange = globalDateRange; 
+      
+      let baseFilters: FilterState = { 
+          ...INITIAL_FILTER_STATE, 
+          dateRange: baseDateRange
+      };
+
+      // Apply the AI's requested filters
+      const newFilters = {
+          ...baseFilters,
+          ...filters
+      };
+      
+      // Calculate next tab number for AI tabs to avoid collisions
+      setTabs(currentTabs => {
+          const aiTabsCount = currentTabs.filter(t => t.name.startsWith('AI Result')).length;
+          const newTabName = `AI Result ${aiTabsCount + 1}`;
+
+          const newTab: LogTab = {
+              id: newTabId,
+              name: newTabName,
+              filters: newFilters,
+              fixedFilters: undefined,
+              currentPage: 1,
+              scrollTop: 0,
+              ...INITIAL_VIEW_STATE
+          };
+
+          // Append new tab and switch to it
+          setTimeout(() => setActiveTabId(newTabId), 50);
+          return [...currentTabs, newTab];
+      });
+  }, [globalDateRange]);
+
+  const handleTabViewStateChange = useCallback((changes: Partial<LogTab>) => {
+    if (activeTabId === null) return;
+    setTabs(currentTabs =>
+        currentTabs.map(tab =>
+            tab.id === activeTabId ? { ...tab, ...changes } : tab
+        )
+    );
+  }, [activeTabId]);
+
+  const handleAIScrollToLog = useCallback((logId: number) => {
+      // Logic: Switch to "All Logs" tab (index 0) to ensure the log is visible,
+      // then trigger the scroll.
+      
+      setTabs(currentTabs => {
+          if (currentTabs.length === 0) return currentTabs;
+          
+          const allLogsTabId = currentTabs[0].id;
+
+          // Schedule the side-effect to switch tabs and set scroll target
+          // This ensures we don't try to scroll before the view state is consistent
+          setTimeout(() => {
+              setActiveTabId(allLogsTabId);
+              setScrollToLogId(logId);
+          }, 0);
+
+          // Force the target tab to 'data' view mode
+          return currentTabs.map((t, i) => i === 0 ? { ...t, viewMode: 'data' } : t);
+      });
+  }, []);
+
   const handlePageChange = useCallback((page: number) => {
     if (activeTabId === null) return;
     setTabs(currentTabs => currentTabs.map(tab =>
@@ -511,15 +585,6 @@ const App: React.FC = () => {
     setTabs(currentTabs =>
         currentTabs.map(tab =>
             tab.id === activeTabId ? { ...tab, scrollTop } : tab
-        )
-    );
-  }, [activeTabId]);
-
-  const handleTabViewStateChange = useCallback((changes: Partial<LogTab>) => {
-    if (activeTabId === null) return;
-    setTabs(currentTabs =>
-        currentTabs.map(tab =>
-            tab.id === activeTabId ? { ...tab, ...changes } : tab
         )
     );
   }, [activeTabId]);
@@ -615,6 +680,12 @@ const App: React.FC = () => {
     if (allLogsTab) {
         setActiveTabId(allLogsTab.id);
         setScrollToLogId(log.id);
+        // Force view to data
+        setTabs(currentTabs =>
+            currentTabs.map(tab =>
+                tab.id === allLogsTab.id ? { ...tab, viewMode: 'data' } : tab
+            )
+        );
     }
   }, [tabs]);
 
@@ -835,8 +906,9 @@ const App: React.FC = () => {
              </div>
           )}
 
-          <main className="flex-1 flex flex-col min-w-0 w-full">
-            <div className="flex-shrink-0 bg-gray-900 border-b border-gray-700 flex items-center justify-between">
+          <main className="flex-1 flex flex-col min-w-0 w-full relative">
+            {/* Header */}
+            <div className="flex-shrink-0 bg-gray-900 border-b border-gray-700 flex items-center justify-between pr-2">
               <div className="flex items-center">
                   <button 
                     onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -907,8 +979,19 @@ const App: React.FC = () => {
                     })}
                   </div>
               </div>
+              
+              {/* AI Assistant Toggle */}
+              <button
+                onClick={() => setIsAIPanelOpen(!isAIPanelOpen)}
+                className={`p-1.5 rounded-md flex items-center space-x-1 text-xs font-medium transition-colors ${isAIPanelOpen ? 'bg-blue-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+                title="Toggle AI Assistant"
+              >
+                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                 <span className="hidden sm:inline">AI Assistant</span>
+              </button>
             </div>
-            <div className="flex-grow min-h-0">
+
+            <div className="flex-grow min-h-0 relative">
               <LogViewer
                 logs={filteredLogs}
                 totalCount={baseLogs.length}
@@ -925,6 +1008,8 @@ const App: React.FC = () => {
                 scrollTop={activeTab.scrollTop}
                 onScrollChange={handleScrollChange}
                 // View State Persistence
+                viewMode={activeTab.viewMode}
+                onViewModeChange={(mode) => handleTabViewStateChange({ viewMode: mode })}
                 tabId={activeTab.id}
                 logsPerPage={activeTab.logsPerPage || 500}
                 onLogsPerPageChange={handleLogsPerPageChange}
@@ -936,6 +1021,16 @@ const App: React.FC = () => {
                 onSearchMatchWholeWordChange={(b) => handleTabViewStateChange({ searchMatchWholeWord: b })}
                 searchUseRegex={activeTab.searchUseRegex || false}
                 onSearchUseRegexChange={(b) => handleTabViewStateChange({ searchUseRegex: b })}
+              />
+
+              <AIAssistant 
+                 isOpen={isAIPanelOpen} 
+                 onClose={() => setIsAIPanelOpen(false)} 
+                 visibleLogs={filteredLogs}
+                 allLogs={baseLogs}
+                 allDaemons={allDaemons}
+                 onUpdateFilters={handleAICreateTab}
+                 onScrollToLog={handleAIScrollToLog}
               />
             </div>
           </main>

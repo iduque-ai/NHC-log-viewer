@@ -342,6 +342,10 @@ export const LogTable: React.FC<LogTableProps> = ({
   useEffect(() => {
     if (targetScrollId === null) return;
 
+    // Retry logic to handle cases where layout/render is slightly delayed (e.g., view mode switching)
+    let attempts = 0;
+    const maxAttempts = 20; // Increased to cover ~2 seconds of loading time
+
     const attemptScroll = () => {
         // Since we have duplicate rows (one for desktop, one for mobile), we need to find the one that is visible.
         const desktopRow = document.getElementById(`log-row-desktop-${targetScrollId}`);
@@ -369,28 +373,34 @@ export const LogTable: React.FC<LogTableProps> = ({
                 if (targetScrollId === internalScrollId) {
                     setInternalScrollId(null);
                 }
-            }, 50);
+            }, 100);
         } else {
-            // If row is not found in DOM, check if we need to switch page first
-            const logIndex = data.findIndex(log => log.id === targetScrollId);
-            if (logIndex !== -1) {
-                const targetPage = Math.floor(logIndex / logsPerPage) + 1;
-                if (targetPage !== currentPage) {
-                    onPageChange(targetPage);
-                    // IMPORTANT: Return here to wait for the next render with correct page
-                    return;
+            // Row not found in DOM yet.
+            if (attempts < maxAttempts) {
+                attempts++;
+                // If row is not found in DOM, check if we need to switch page first
+                const logIndex = data.findIndex(log => log.id === targetScrollId);
+                if (logIndex !== -1) {
+                    const targetPage = Math.floor(logIndex / logsPerPage) + 1;
+                    if (targetPage !== currentPage) {
+                        onPageChange(targetPage);
+                        // Wait for next render cycle
+                        return;
+                    }
                 }
+                
+                // Retry in next frame
+                requestAnimationFrame(() => setTimeout(attemptScroll, 100));
             } else {
-                // ID not found in data (e.g. filtered out), just clear the request
+                // Gave up, clear the request
                 if (targetScrollId === scrollToLogId && onScrollComplete) onScrollComplete();
                 if (targetScrollId === internalScrollId) setInternalScrollId(null);
             }
         }
     };
 
-    // Use requestAnimationFrame to ensure we try after paint, fallback to setTimeout
     requestAnimationFrame(() => {
-        setTimeout(attemptScroll, 0);
+        setTimeout(attemptScroll, 50);
     });
 
   }, [targetScrollId, currentPage, data, onScrollComplete, logsPerPage, onPageChange, onScrollChange, scrollToLogId, internalScrollId]);

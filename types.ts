@@ -49,6 +49,7 @@ export interface LogTab {
   currentPage?: number;
   scrollTop?: number;
   // View State Persistence
+  viewMode: 'data' | 'summary';
   logsPerPage: number;
   searchQuery: string;
   searchMatchCase: boolean;

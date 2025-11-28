@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+
+import React from 'react';
 import { LogEntry } from '../types.ts';
 import { SummaryDashboard } from './SummaryDashboard.tsx';
 import { LogTable } from './LogTable.tsx';
@@ -19,6 +20,8 @@ interface LogViewerProps {
     scrollTop?: number;
     onScrollChange?: (scrollTop: number) => void;
     // View State Props
+    viewMode: 'data' | 'summary';
+    onViewModeChange: (mode: 'data' | 'summary') => void;
     tabId: number;
     logsPerPage: number;
     onLogsPerPageChange: (n: number) => void;
@@ -47,6 +50,8 @@ export const LogViewer: React.FC<LogViewerProps> = ({
     onPageChange,
     scrollTop,
     onScrollChange,
+    viewMode,
+    onViewModeChange,
     tabId,
     logsPerPage,
     onLogsPerPageChange,
@@ -59,40 +64,33 @@ export const LogViewer: React.FC<LogViewerProps> = ({
     searchUseRegex,
     onSearchUseRegexChange
 }) => {
-    const [activeView, setActiveView] = useState<'data' | 'summary'>('data');
-
-    // When the user switches to a new top-level tab, reset the view to the default 'data' view.
-    useEffect(() => {
-        setActiveView('data');
-    }, [logs]);
-
+    
     return (
         <div className="flex flex-col h-full bg-gray-900">
             <div className="flex-shrink-0 border-b border-gray-700 bg-gray-800">
                 <nav className="flex space-x-1 p-1" aria-label="Log Views">
                     <button
-                        onClick={() => setActiveView('summary')}
-                        className={`py-1 px-3 rounded-md text-xs font-medium transition-colors ${activeView === 'summary' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-600'}`}
-                        aria-current={activeView === 'summary' ? 'page' : undefined}
+                        onClick={() => onViewModeChange('summary')}
+                        className={`py-1 px-3 rounded-md text-xs font-medium transition-colors ${viewMode === 'summary' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-600'}`}
+                        aria-current={viewMode === 'summary' ? 'page' : undefined}
                     >
                         Summary Statistics
                     </button>
                     <button
-                        onClick={() => setActiveView('data')}
-                        className={`py-1 px-3 rounded-md text-xs font-medium transition-colors ${activeView === 'data' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-600'}`}
-                        aria-current={activeView === 'data' ? 'page' : undefined}
+                        onClick={() => onViewModeChange('data')}
+                        className={`py-1 px-3 rounded-md text-xs font-medium transition-colors ${viewMode === 'data' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-600'}`}
+                        aria-current={viewMode === 'data' ? 'page' : undefined}
                     >
                         Log Data
                     </button>
                 </nav>
             </div>
             {/* 
-                FIX: Changed overflow-auto to conditional based on view. 
                 LogTable handles its own scrolling internally to support sticky headers/footers and correct scrollIntoView behavior.
                 SummaryDashboard needs the container to scroll.
             */}
-            <div className={`flex-grow ${activeView === 'summary' ? 'overflow-auto' : 'overflow-hidden'}`}>
-               {activeView === 'summary' 
+            <div className={`flex-grow ${viewMode === 'summary' ? 'overflow-auto' : 'overflow-hidden'}`}>
+               {viewMode === 'summary' 
                     ? <SummaryDashboard data={logs} />
                     : <LogTable 
                         data={logs} 
