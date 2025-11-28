@@ -11,6 +11,7 @@
   "dependencies": {
     "@google/genai": "latest",
     "@vercel/analytics": "latest",
+    "@mlc-ai/web-llm": "latest",
     "jszip": "latest",
     "pako": "latest",
     "react": "latest",
