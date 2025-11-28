@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleGenAI, Type, FunctionDeclaration, Content, Part } from "@google/genai";
 import { CreateMLCEngine } from "@mlc-ai/web-llm";
@@ -240,7 +239,7 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   // Default to Flash as it's balanced
   const [modelTier, setModelTier] = useState<string>('gemini-2.5-flash');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  
+
   // Ref to hold the WebLLM engine instance to avoid re-init
   const webLlmEngineRef = useRef<any>(null);
 
@@ -493,7 +492,8 @@ User Question: ${userText}
                         model_list: [
                             {
                                 "model_id": WEB_LLM_MODEL_ID,
-                                "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0.2.48/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+                                // Fix for "Failed to execute add on Cache": Use v0.2.72 compatible library path for WASM
+                                "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0.2.72/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
                                 "model": "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC",
                                 "vram_required_MB": 3000,
                                 "low_resource_required": true,
@@ -544,6 +544,8 @@ User Question: ${userText}
         let errorMsg = "Error running WebLLM: " + (error.message || "Unknown error");
         if (error.message?.includes("WebGPU")) {
             errorMsg = "WebGPU is not supported or enabled in this browser. Please use Chrome/Edge and ensure hardware acceleration is on.";
+        } else if (error.message?.includes("Cache")) {
+            errorMsg = "Failed to download model. Please check your internet connection or firewall. (Cache Error)";
         }
         setMessages(prev => [...prev, { 
             id: Date.now().toString(), 
@@ -571,8 +573,10 @@ User Question: ${userText}
         return;
     }
 
-    if (!import.meta.env.VITE_API_KEY) {
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: 'Error: API_KEY is missing.', isError: true }]);
+    const apiKey = process.env.API_KEY;
+
+    if (!apiKey) {
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: 'Error: API Key is missing. Please ensure process.env.API_KEY is configured.', isError: true }]);
       return;
     }
 
@@ -582,7 +586,7 @@ User Question: ${userText}
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       // Use the selected model tier directly as the model name
       const modelName = modelTier;
       const model = ai.models;
@@ -676,6 +680,9 @@ User Question: ${userText}
                   setModelTier('gemini-2.5-flash');
               }
           }
+          if (msg.includes('API_KEY')) {
+              errorMessage = "Invalid API Key. Please check your settings.";
+          }
       }
       
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: errorMessage, isError: true }]);
@@ -761,7 +768,7 @@ User Question: ${userText}
             </button>
         </div>
       </div>
-
+      
       {/* Quick Actions */}
       <div className="p-3 grid grid-cols-2 gap-2 border-b border-gray-700 bg-gray-800/50">
         <button 

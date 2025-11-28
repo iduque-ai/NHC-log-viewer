@@ -1,4 +1,3 @@
-
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -11,9 +10,9 @@ export default defineConfig(() => {
 
   return {
     plugins: [react()],
-    // Define the VITE_API_KEY global to ensure it exists even if using the legacy API_KEY env var
+    // Fixed: Define process.env.API_KEY to be available in the browser
     define: {
-      'import.meta.env.VITE_API_KEY': JSON.stringify(apiKey),
+      'process.env.API_KEY': JSON.stringify(apiKey),
     },
   };
 })
