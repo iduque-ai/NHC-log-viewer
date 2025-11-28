@@ -571,7 +571,7 @@ User Question: ${userText}
         return;
     }
 
-    if (!process.env.API_KEY) {
+    if (!import.meta.env.VITE_API_KEY) {
       setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: 'Error: API_KEY is missing.', isError: true }]);
       return;
     }
@@ -582,7 +582,7 @@ User Question: ${userText}
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_API_KEY });
       // Use the selected model tier directly as the model name
       const modelName = modelTier;
       const model = ai.models;
