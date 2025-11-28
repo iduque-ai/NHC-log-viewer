@@ -1,4 +1,6 @@
 
+// Use interface augmentation to add API_KEY to ProcessEnv.
+// This avoids conflict with existing 'process' declaration from @types/node.
 declare namespace NodeJS {
   interface ProcessEnv {
     API_KEY?: string;
