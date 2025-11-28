@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mlc-ai/web-llm": "^0.2.72",
+    "@google/genai": "^0.2.1",
     "@vercel/analytics": "^1.4.1",
     "jszip": "^3.10.1",
     "pako": "^2.1.0",
