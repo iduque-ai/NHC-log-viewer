@@ -1,20 +1,65 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# NHC Log Viewer
 
-# Run and deploy your AI Studio app
+## Overview
 
-This contains everything you need to run your app locally.
+NHC Log Viewer is an interactive web application designed to parse, filter, and analyze application log files. Built with performance and privacy in mind, it processes all data locally in your browser, no logs are ever uploaded to a server.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1LXbve7IBEz0SDBR6JjsV5AjwP7qgaRE9
+It provides powerful tools for developers and system administrators to quickly diagnose issues, visualize log distributions, and perform deep-dive analysis on complex log files.
 
-## Run Locally
+## Key Features
 
-**Prerequisites:**  Node.js
+*   **🔒 Privacy Focused**: 100% client-side processing. Your logs never leave your device.
+*   **📂 Multi-Format Support**:
+    *   Supports `.log` and `.txt` files.
+    *   Native support for compressed archives: `.zip` and `.gz` (GZIP).
+*   **🔍 Advanced Search & Filtering**:
+    *   **Boolean Logic**: Use complex queries like `(error || warning) && !network`.
+    *   **Regex Support**: Full Regular Expression capabilities.
+    *   **Granular Filters**: Filter by Log Level, Daemon, Module, Function Name, and specific Date Ranges.
+*   **📊 Visualization Dashboard**:
+    *   View error rates and log volume over time.
+    *   Analyze distribution by log level and top-occurring daemons/functions.
+*   **📱 Responsive Design**:
+    *   Dense table view for desktop analysis.
+    *   Card-based view for mobile debugging.
 
+## Supported Formats
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+The application automatically detects and parses:
+*   **Standard Syslog**: `Sep 11 12:00:00 hostname daemon[123]: message`
+*   **Asterisk Logs**: Detailed logs including file/line numbers and function names.
+*   **ISO 8601**: Logs using `YYYY-MM-DD` timestamps.
+
+## Getting Started
+
+### Prerequisites
+
+*   Node.js (v18 or higher recommended)
+
+### Installation
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/your-repo/nhc-log-viewer.git
+    cd nhc-log-viewer
+    ```
+
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+3.  Start the development server:
+    ```bash
+    npm run dev
+    ```
+
+4.  Open `http://localhost:5173` in your browser.
+
+## Tech Stack
+
+*   **Framework**: React (TypeScript)
+*   **Build Tool**: Vite
+*   **Styling**: Tailwind CSS
+*   **Charts**: Chart.js
+*   **Compression**: JSZip, Pako
