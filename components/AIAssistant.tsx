@@ -482,11 +482,23 @@ User Question: ${userText}
     try {
         if (!webLlmEngineRef.current) {
              setDownloadProgress("Initializing engine...");
+             // Provide explicit appConfig to ensure the model ID can be resolved.
              const engine = await CreateMLCEngine(
                  WEB_LLM_MODEL_ID,
                  {
                      initProgressCallback: (report) => {
                          setDownloadProgress(report.text);
+                     },
+                     appConfig: {
+                        model_list: [
+                            {
+                                "model_id": WEB_LLM_MODEL_ID,
+                                "model_lib": "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0.2.48/Llama-3.2-3B-Instruct-q4f16_1-ctx4k_cs1k-webgpu.wasm",
+                                "model": "https://huggingface.co/mlc-ai/Llama-3.2-3B-Instruct-q4f16_1-MLC",
+                                "vram_required_MB": 3000,
+                                "low_resource_required": true,
+                            }
+                        ]
                      }
                  }
              );
