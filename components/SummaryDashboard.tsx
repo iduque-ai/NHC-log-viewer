@@ -147,7 +147,7 @@ export const SummaryDashboard: React.FC<SummaryDashboardProps> = ({ data }) => {
         y: { ticks: { color: '#9ca3af', font: { size: 10 } }, grid: { display: false } }
     };
 
-    const createOrUpdateChart = (key: string, ref: React.RefObject<HTMLCanvasElement>, type: any, data: any, options: any) => {
+    const createOrUpdateChart = (key: string, ref: React.RefObject<HTMLCanvasElement | null>, type: any, data: any, options: any) => {
         if (chartInstances.current[key]) chartInstances.current[key].destroy();
         const ctx = ref.current?.getContext('2d');
         if (ctx) chartInstances.current[key] = new Chart(ctx, { type, data, options });

@@ -1,6 +1,6 @@
 // FIX: Imported `useMemo` from React to resolve reference error.
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { GoogleGenAI, Type, FunctionDeclaration, Content, Part } from "@google/genai";
+import { GoogleGenAI, Type, FunctionDeclaration, Content, Part, GenerateContentResponse } from "@google/genai";
 import { CreateMLCEngine } from "@mlc-ai/web-llm";
 import { LogEntry, FilterState } from '../types.ts';
 
@@ -803,7 +803,7 @@ ${toolList}
                 }
             } else {
                 const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
-                const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: [{ role: 'user', parts: [{ text: solutionPrompt }] }] });
+                const result: GenerateContentResponse = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: [{ role: 'user', parts: [{ text: solutionPrompt }] }] });
                 solutionText = result.text || "Could not generate a solution.";
             }
             return { result: "Here is a potential solution:", solution: solutionText };
@@ -1027,7 +1027,7 @@ ${toolList}
         
         const availableTools = getAvailableTools(conversationStateRef.current);
         
-        const result = await ai.models.generateContent({
+        const result: GenerateContentResponse = await ai.models.generateContent({
             model: modelName,
             contents: chatHistoryRef.current,
             config: {
@@ -1077,7 +1077,7 @@ ${toolList}
           };
           chatHistoryRef.current.push(summaryPrompt);
           
-          const finalResult = await ai.models.generateContent({
+          const finalResult: GenerateContentResponse = await ai.models.generateContent({
             model: modelName,
             contents: chatHistoryRef.current,
           });
@@ -1103,7 +1103,7 @@ ${toolList}
       if (typeof error === 'object' && error !== null) {
           const msg = error.message || JSON.stringify(error);
           if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-              errorMessage = "Rate limit exceeded. Try switching to a faster model or wait a moment.";
+              errorMessage = `The rate limit for the **${modelTier}** model was exceeded. Please wait a moment before trying again, or switch to a different model tier.`;
               try {
                   const jsonMatch = msg.match(/{.*}/);
                   if (jsonMatch) {
@@ -1113,7 +1113,7 @@ ${toolList}
                           const secondsMatch = retryInfo.retryDelay.match(/(\d+(\.\d+)?)/);
                           if (secondsMatch) {
                               const seconds = Math.ceil(parseFloat(secondsMatch[1]));
-                              errorMessage = `Rate limit exceeded. Please try again in about ${seconds} seconds.`;
+                              errorMessage = `Rate limit for **${modelTier}** exceeded. Please try again in about ${seconds} seconds.`;
                           }
                       }
                       const usageLinkMatch = msg.match(/https:\/\/ai\.dev\/usage\?tab=rate-limit/);
