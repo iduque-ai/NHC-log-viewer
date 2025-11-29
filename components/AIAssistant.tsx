@@ -11,6 +11,8 @@ interface AIAssistantProps {
   allDaemons: string[];
   onUpdateFilters: (filters: Partial<FilterState>, reset?: boolean) => void;
   onScrollToLog: (logId: number) => void;
+  savedFindings: string[];
+  onSaveFinding: (finding: string) => void;
 }
 
 interface Message {
@@ -312,7 +314,7 @@ const parseLocalToolCall = (text: string): { tool_name: string, arguments: any }
     return null;
 };
 
-export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visibleLogs, allLogs, allDaemons, onUpdateFilters, onScrollToLog }) => {
+export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visibleLogs, allLogs, allDaemons, onUpdateFilters, onScrollToLog, savedFindings, onSaveFinding }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -379,6 +381,15 @@ BEHAVIOR RULES:
 5. **ALWAYS RESPOND**: After executing a tool (like \`scroll_to_log\`), you MUST provide a text response explaining what you did. Never return an empty response.
 6. **New Tabs**: If the user asks to filter the view (e.g., "show me only errors"), use \`update_filters\`. This will create a NEW tab.
 
+MULTI-STEP ANALYSIS (TOOL CHAINING):
+- For complex questions (e.g., "find the root cause of the most common error"), you MUST break the problem down into sequential steps.
+- **Formulate a Plan**: Think step-by-step. For the example above, your plan should be:
+    1. First, call \`find_log_patterns\` to identify the most frequent error.
+    2. Second, take the \`example_log_id\` from the result of the first tool.
+    3. Third, call \`trace_error_origin\` with that log ID to find the events that led to it.
+- **Execute Sequentially**: Use one tool, analyze the result, then decide on the next tool.
+- **Synthesize**: After completing your plan, combine all findings into a single, comprehensive final answer for the user.
+
 RESPONSE STYLE:
 - **Interpret, Don't Just List**: Provide a narrative summary of events. Explain the context behind the logs.
 - **Be Conversational**: Write naturally. Use paragraphs and bullet points for readability.
@@ -410,6 +421,14 @@ TOOL USAGE RULES:
 3.  **Strict Formatting**: When referring to a specific log line in your final text answer, YOU MUST use the format: [Log ID: <number>].
 4.  **Final Answer**: After you have gathered enough information from the tools, provide a final, conversational answer in plain text. Do NOT use the JSON format for your final answer.
 
+MULTI-STEP ANALYSIS:
+- For complex questions, you can use tools sequentially.
+- **Example Plan**: To answer "find the root cause of the most common error", you would:
+    1. First, respond with the JSON for \`find_log_patterns\` with \`pattern_type: "repeating_error"\`.
+    2. You will then get a tool response containing the result, including an \`example_log_id\`.
+    3. Second, respond with the JSON for \`trace_error_origin\` using the \`error_log_id\` you received.
+    4. After you get the trace results, provide the final answer to the user in plain text.
+
 Available Tools:
 -   \`search_logs\`: Search the ENTIRE log file. Arguments: \`{"keywords": ["term1"], "match_mode": "OR"|"AND"}\`
 -   \`scroll_to_log\`: Jump the user's view to a specific line. Arguments: \`{"log_id": 123}\`
@@ -434,6 +453,28 @@ Available Tools:
   useEffect(() => {
     scrollToBottom();
   }, [messages, isOpen, downloadProgress]);
+
+  // Display saved findings when the panel opens for a recognized log source
+  useEffect(() => {
+    if (isOpen && savedFindings.length > 0) {
+        const alreadyShown = messages.some(m => m.id.startsWith('findings-'));
+        if (!alreadyShown) {
+            const findingsText = `**Welcome Back!** I recognize this log source. Here are your previously saved findings:\n\n` +
+                savedFindings.map((f, i) => `* **Finding ${i + 1}:** ${f.substring(0, 200)}${f.length > 200 ? '...' : ''}`).join('\n\n') +
+                "\n\nWould you like me to re-investigate any of these issues in the current logs?";
+
+            setMessages(prev => [
+                ...prev,
+                {
+                    id: `findings-${Date.now()}`,
+                    role: 'model',
+                    text: findingsText,
+                    isWarning: true,
+                }
+            ]);
+        }
+    }
+  }, [isOpen, savedFindings, messages]);
 
   const handleResetChat = () => {
       setMessages([{ 
@@ -1086,39 +1127,51 @@ Available Tools:
 
       {/* Messages */}
       <div className="flex-grow overflow-y-auto p-4 space-y-4 bg-gray-900/50">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[90%] rounded-lg p-3 text-xs leading-relaxed shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-blue-600 text-white' 
-                  : msg.isError
-                    ? 'bg-red-900/50 border border-red-700 text-red-200'
-                    : msg.isWarning
-                      ? 'bg-yellow-900/50 border border-yellow-700 text-yellow-200'
-                      : 'bg-gray-700 text-gray-200 border border-gray-600'
-            }`}>
-              <div className="flex items-start">
-                  {msg.isWarning && (
-                    <div className="mr-2 flex-shrink-0 text-yellow-400 pt-0.5">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-                    </div>
-                  )}
-                  <div className="flex-1">
-                     <FormattedMessage text={msg.text} onScrollToLog={onScrollToLog} />
+        {messages.map((msg) => {
+            const isAnalyticalResponse = msg.role === 'model' && !msg.isError && !msg.isWarning && (msg.text.length > 100 || msg.text.includes('[Log ID:'));
+            return (
+              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`relative group max-w-[90%] rounded-lg p-3 text-xs leading-relaxed shadow-sm ${
+                    msg.role === 'user' 
+                      ? 'bg-blue-600 text-white' 
+                      : msg.isError
+                        ? 'bg-red-900/50 border border-red-700 text-red-200'
+                        : msg.isWarning
+                          ? 'bg-yellow-900/50 border border-yellow-700 text-yellow-200'
+                          : 'bg-gray-700 text-gray-200 border border-gray-600'
+                }`}>
+                  <div className="flex items-start">
+                      {msg.isWarning && (
+                        <div className="mr-2 flex-shrink-0 text-yellow-400 pt-0.5">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        </div>
+                      )}
+                      <div className="flex-1">
+                         <FormattedMessage text={msg.text} onScrollToLog={onScrollToLog} />
+                      </div>
+                      {msg.isError && (
+                          <button 
+                              onClick={() => handleRetry(msg.id)}
+                              className="ml-2 p-1 text-red-400 hover:text-red-300 hover:bg-red-900/50 rounded transition-colors flex-shrink-0"
+                              title="Retry"
+                          >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                          </button>
+                      )}
                   </div>
-                  {msg.isError && (
-                      <button 
-                          onClick={() => handleRetry(msg.id)}
-                          className="ml-2 p-1 text-red-400 hover:text-red-300 hover:bg-red-900/50 rounded transition-colors flex-shrink-0"
-                          title="Retry"
+                   {isAnalyticalResponse && (
+                      <button
+                        onClick={() => onSaveFinding(msg.text)}
+                        className="absolute top-1 right-1 p-1 bg-gray-800/50 rounded-full text-gray-400 hover:text-white hover:bg-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Save this finding for future sessions with this log source"
                       >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"></path></svg>
                       </button>
-                  )}
+                   )}
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
+            )
+        })}
         {isLoading && (
             <div className="flex justify-start">
                 <div className="bg-gray-700 rounded-lg p-3 border border-gray-600 flex flex-col items-start space-y-2 max-w-[90%]">

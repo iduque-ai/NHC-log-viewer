@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { ungzip } from 'pako';
@@ -300,6 +301,10 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth >= 768);
   const [draggedTabIndex, setDraggedTabIndex] = useState<number | null>(null);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+
+  // Persistent Memory State
+  const [savedFindings, setSavedFindings] = useState<string[]>([]);
+  const [currentSourceHash, setCurrentSourceHash] = useState<string | null>(null);
 
   const fileIdCounter = useRef(0);
   const logIdCounter = useRef(1);
@@ -775,19 +780,22 @@ const App: React.FC = () => {
     setDraggedTabIndex(null);
   };
 
-  const { allDaemons, allModules, allFunctionNames } = useMemo(() => {
+  const { allDaemons, allModules, allFunctionNames, allHostnames } = useMemo(() => {
     const daemons = new Set<string>();
     const modules = new Set<string>();
     const functionNames = new Set<string>();
+    const hostnames = new Set<string>();
     baseLogs.forEach(log => {
       if (log.daemon) daemons.add(log.daemon);
       if (log.module) modules.add(log.module);
       if (log.functionName) functionNames.add(log.functionName);
+      if (log.hostname) hostnames.add(log.hostname);
     });
     return {
       allDaemons: Array.from(daemons).sort(),
       allModules: Array.from(modules).sort(),
       allFunctionNames: Array.from(functionNames).sort(),
+      allHostnames: Array.from(hostnames).sort(),
     };
   }, [baseLogs]);
 
@@ -865,6 +873,44 @@ const App: React.FC = () => {
       return tabsNeedUpdate ? updatedTabs : currentTabs;
     });
   }, [allDaemons, allModules, allFunctionNames]);
+
+  // Persistent Memory Logic
+  useEffect(() => {
+    if (baseLogs.length === 0) {
+        setCurrentSourceHash(null);
+        setSavedFindings([]);
+        return;
+    }
+
+    const key = [...allDaemons.sort(), ...allHostnames.sort()].join('|');
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+        const char = key.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0;
+    }
+    const newHash = `nhc-log-source-${hash}`;
+    setCurrentSourceHash(newHash);
+
+    const findingsRaw = localStorage.getItem(newHash);
+    const findings = findingsRaw ? JSON.parse(findingsRaw) : [];
+    setSavedFindings(findings);
+  }, [allDaemons, allHostnames, baseLogs.length]);
+
+  const handleSaveFinding = useCallback((findingText: string) => {
+    if (!currentSourceHash) return;
+    try {
+        const existingFindingsRaw = localStorage.getItem(currentSourceHash);
+        const existingFindings = existingFindingsRaw ? JSON.parse(existingFindingsRaw) : [];
+        if (!existingFindings.includes(findingText)) {
+            const newFindings = [...existingFindings, findingText];
+            localStorage.setItem(currentSourceHash, JSON.stringify(newFindings));
+            setSavedFindings(newFindings);
+        }
+    } catch (e) {
+        console.error("Failed to save finding to localStorage:", e);
+    }
+  }, [currentSourceHash]);
 
   return (
     <div className="flex h-[100dvh] bg-gray-800 text-white font-sans overflow-hidden relative">
@@ -1032,6 +1078,8 @@ const App: React.FC = () => {
                  allDaemons={allDaemons}
                  onUpdateFilters={handleAICreateTab}
                  onScrollToLog={handleAIScrollToLog}
+                 savedFindings={savedFindings}
+                 onSaveFinding={handleSaveFinding}
               />
             </div>
           </main>
