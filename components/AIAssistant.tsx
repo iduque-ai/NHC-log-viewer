@@ -92,7 +92,7 @@ const scrollToLogTool: FunctionDeclaration = {
 
 const searchLogsTool: FunctionDeclaration = {
   name: 'search_logs',
-  description: 'Search ALL logs for specific information, including timestamps. You can provide multiple synonyms or related terms to broaden the search.',
+  description: 'Search ALL logs for specific information, including timestamps. You can provide multiple synonyms or related terms to broaden the search. Returns a summary of findings.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -117,7 +117,7 @@ const searchLogsTool: FunctionDeclaration = {
 
 const findLogPatternsTool: FunctionDeclaration = {
   name: 'find_log_patterns',
-  description: 'Analyzes logs to find repeating messages or statistical anomalies in frequency. Useful for spotting trends or systemic issues.',
+  description: 'Analyzes logs to find repeating messages or statistical anomalies in frequency. Useful for spotting trends or systemic issues. Returns a summary of findings.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -137,7 +137,7 @@ const findLogPatternsTool: FunctionDeclaration = {
 
 const traceErrorOriginTool: FunctionDeclaration = {
   name: 'trace_error_origin',
-  description: 'Traces events leading up to a specific log entry to help find the root cause. It looks backwards in time from the given log ID.',
+  description: 'Traces events leading up to a specific log entry to help find the root cause. It looks backwards in time from the given log ID. Returns a summary of the trace.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -156,7 +156,7 @@ const traceErrorOriginTool: FunctionDeclaration = {
 
 const suggestSolutionTool: FunctionDeclaration = {
   name: 'suggest_solution',
-  description: 'Provides potential solutions or debugging steps for a given error message. This tool is for getting advice, not for searching logs.',
+  description: 'Provides potential solutions or debugging steps for a given error message. This tool is for getting advice, not for searching logs. Only use this when the user explicitly asks for a solution.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -169,12 +169,27 @@ const suggestSolutionTool: FunctionDeclaration = {
   }
 };
 
+const allTools = { updateFiltersTool, scrollToLogTool, searchLogsTool, findLogPatternsTool, traceErrorOriginTool, suggestSolutionTool };
+type ConversationState = 'IDLE' | 'ANALYZING';
+
+const getAvailableTools = (state: ConversationState): FunctionDeclaration[] => {
+    switch (state) {
+        case 'ANALYZING':
+            // After finding a specific issue, the AI should focus on digging deeper or solving it.
+            return [allTools.traceErrorOriginTool, allTools.suggestSolutionTool, allTools.scrollToLogTool, allTools.searchLogsTool];
+        case 'IDLE':
+        default:
+            // Initially, the AI should focus on broad exploration.
+            return [allTools.searchLogsTool, allTools.findLogPatternsTool, allTools.updateFiltersTool, allTools.scrollToLogTool];
+    }
+};
+
 // --- Formatted Message Component ---
 
 // Helper to recursively render inline markdown
 const renderInlineMarkdown = (text: string, onScrollToLog: (id: number) => void): React.ReactNode => {
-    // Split by [Log ID: 123] and markdown links [text](url)
-    const parts = text.split(/(\[Log ID: \d+\]|\[.*?\]\(.*?\))/g);
+    // Split by [Log ID: 123], markdown links [text](url), and raw http(s) links
+    const parts = text.split(/(\[Log ID: \d+\]|\[.*?\]\(.*?\)|https?:\/\/[^\s\)]+)/g);
 
     return parts.map((part, i) => {
         const logIdMatch = part.match(/^\[Log ID: (\d+)\]$/);
@@ -199,6 +214,14 @@ const renderInlineMarkdown = (text: string, onScrollToLog: (id: number) => void)
             return (
                 <a href={url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-200 underline" key={i}>
                     {text}
+                </a>
+            );
+        }
+
+        if (part.startsWith('http')) {
+            return (
+                <a href={part} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-200 underline" key={i}>
+                    {part}
                 </a>
             );
         }
@@ -338,6 +361,9 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   const [userApiKey, setUserApiKey] = useState('');
   const [tempApiKey, setTempApiKey] = useState('');
 
+  // Conversation State Management
+  const conversationStateRef = useRef<ConversationState>('IDLE');
+
   useEffect(() => {
       const storedKey = localStorage.getItem('nhc_log_viewer_api_key');
       if (storedKey) {
@@ -390,24 +416,20 @@ MULTI-STEP ANALYSIS (TOOL CHAINING):
     3. Third, I will call \`trace_error_origin\` using that specific ID to find the events that led up to it.
 - **Execute Sequentially**: Use one tool, analyze the result you get back, then decide on the next tool. Do not call multiple tools at once.
 - **Synthesize**: After completing all steps in your plan, combine all your findings into a single, comprehensive final answer for the user. Do not simply list the tool results.
+- **Note**: The list of available tools may change based on the context. Use the tools you are provided in each turn.
 
 RESPONSE STYLE:
 - **Interpret, Don't Just List**: Provide a narrative summary of events. Explain the context behind the logs.
 - **Be Conversational**: Write naturally. Use paragraphs and bullet points for readability.
 - **Cite Evidence**: Weave [Log ID: <id>] references into your sentences as proof for your analysis.
-
-Available Tools:
-- \`search_logs\`: Search the ENTIRE log file. Use 'OR' mode for synonyms.
-- \`scroll_to_log\`: Jump the user's view to a specific line.
-- \`update_filters\`: Create a NEW tab with specific filters.
-- \`find_log_patterns\`: Find repeating errors or unusual log frequency spikes.
-- \`trace_error_origin\`: Trace events backwards from an error to find its root cause.
-- \`suggest_solution\`: Get debugging advice for a specific error message.
 ` }]
   });
 
-  const getLocalSystemInstruction = () => `
-System Instruction:
+  const getLocalSystemInstruction = (state: ConversationState) => {
+    const availableTools = getAvailableTools(state);
+    const toolList = availableTools.map(t => `- \`${t.name}\`: ${t.description.split('.')[0]}. Arguments: \`${JSON.stringify(t.parameters?.properties || {})}\``).join('\n');
+
+    return `System Instruction:
 You are an expert log analyst. Your goal is to help the user understand their application logs by using the tools available to you.
 
 TOOL USAGE RULES:
@@ -431,14 +453,10 @@ MULTI-STEP ANALYSIS:
     4. **Get Result**: The system provides the trace results.
     5. **Final Answer**: Now that you have all the information, respond with a final answer in plain text, synthesizing the findings.
 
-Available Tools:
--   \`search_logs\`: Search the ENTIRE log file. Arguments: \`{"keywords": ["term1"], "match_mode": "OR"|"AND"}\`
--   \`scroll_to_log\`: Jump the user's view to a specific line. Arguments: \`{"log_id": 123}\`
--   \`update_filters\`: Create a NEW tab with specific filters. Arguments: \`{"log_levels": ["ERROR"]}\`
--   \`find_log_patterns\`: Find repeating errors or log spikes. Arguments: \`{"pattern_type": "repeating_error"|"frequency_spike"}\`
--   \`trace_error_origin\`: Find the root cause of an error. Arguments: \`{"error_log_id": 123}\`
--   \`suggest_solution\`: Get debugging advice. Arguments: \`{"error_message": "the error text"}\`
+Available Tools for this turn:
+${toolList}
 `;
+  };
 
   const chatHistoryRef = useRef<Content[]>([
     getCloudSystemInstruction() as Content,
@@ -491,6 +509,7 @@ Available Tools:
             parts: [{ text: "Understood. I will act as an expert log analyst, using all available tools to proactively find, analyze, and suggest solutions for issues, always citing log IDs and communicating in a clear, conversational manner." }]
         }
       ];
+      conversationStateRef.current = 'IDLE';
   };
 
   const handleWebLlmConsentAccept = () => {
@@ -553,7 +572,6 @@ Available Tools:
         return { error: "Invalid log ID provided." };
     } 
     else if (name === 'search_logs') {
-        // --- Intelligent Weighted Search ---
         let keywords: string[] = [];
         if (args.keywords && Array.isArray(args.keywords)) {
             keywords = args.keywords.map((k: string) => k.toLowerCase().trim());
@@ -564,7 +582,7 @@ Available Tools:
         const matchMode = args.match_mode || 'OR';
         const limit = args.limit || 50;
         
-        if (keywords.length === 0) return { result: "Empty query." };
+        if (keywords.length === 0) return { summary: "Empty query.", logs_found: 0 };
 
         const keywordCounts: Record<string, number> = {};
         keywords.forEach(k => keywordCounts[k] = 0);
@@ -604,9 +622,29 @@ Available Tools:
         scoredMatches.sort((a, b) => b.score - a.score);
         const topMatches = scoredMatches.slice(0, limit).map(m => m.log);
 
-        if (topMatches.length === 0) return { result: `No logs found matching terms: [${keywords.join(', ')}] with mode ${matchMode}.` };
+        if (topMatches.length === 0) {
+            return { summary: `No logs found matching terms: [${keywords.join(', ')}] with mode ${matchMode}.`, logs_found: 0 };
+        }
+
+        const levelCounts = topMatches.reduce((acc, log) => {
+            acc[log.level] = (acc[log.level] || 0) + 1;
+            return acc;
+        }, {} as Record<string, number>);
+
+        const levelSummary = Object.entries(levelCounts).map(([level, count]) => `${count} ${level}`).join(', ');
+
+        const exampleLogs = topMatches.slice(0, 3).map(l => ({
+            id: l.id,
+            timestamp: l.timestamp.toISOString(),
+            level: l.level,
+            daemon: l.daemon,
+            message: l.message
+        }));
+
         return {
-            logs: topMatches.map(l => ({ id: l.id, timestamp: l.timestamp.toISOString(), level: l.level, daemon: l.daemon, message: l.message }))
+            summary: `Found ${topMatches.length} logs. Breakdown: ${levelSummary}.`,
+            logs_found: topMatches.length,
+            example_logs: exampleLogs
         };
     }
     else if (name === 'find_log_patterns') {
@@ -678,9 +716,26 @@ Available Tools:
             const logTime = log.timestamp.getTime();
             return logTime >= startTime && logTime <= endTime;
         });
+        
+        if (traceLogs.length === 0) return { summary: "No logs found in the trace window." };
+
+        const levelCounts = traceLogs.reduce((acc, log) => {
+            acc[log.level] = (acc[log.level] || 0) + 1;
+            return acc;
+        }, {} as Record<string, number>);
+        const levelSummary = Object.entries(levelCounts).map(([level, count]) => `${count} ${level}`).join(', ');
+
+        const recentTraceLogs = traceLogs.slice(-10).map(l => ({
+            id: l.id,
+            timestamp: l.timestamp.toISOString(),
+            level: l.level,
+            daemon: l.daemon,
+            message: l.message.substring(0, 150) + (l.message.length > 150 ? '...' : '')
+        }));
+
         return {
-            result: `Found ${traceLogs.length} logs in the ${trace_window_seconds} seconds leading up to log ${error_log_id}.`,
-            logs: traceLogs.map(l => ({ id: l.id, timestamp: l.timestamp.toISOString(), level: l.level, daemon: l.daemon, message: l.message }))
+            summary: `Found ${traceLogs.length} logs in the ${trace_window_seconds}s leading up to log ${error_log_id}. Breakdown: ${levelSummary}.`,
+            trace_events: recentTraceLogs
         };
     }
     else if (name === 'suggest_solution') {
@@ -728,6 +783,7 @@ Available Tools:
       
       let turnCount = 0;
       const MAX_TURNS = 10;
+      let currentState: ConversationState = 'IDLE';
 
       try {
           if (!window.ai?.languageModel) {
@@ -745,7 +801,7 @@ Available Tools:
           while (turnCount < MAX_TURNS) {
               turnCount++;
 
-              const fullPrompt = getLocalSystemInstruction() + '\n\n--- CHAT HISTORY ---\n\n' +
+              const fullPrompt = getLocalSystemInstruction(currentState) + '\n\n--- CHAT HISTORY ---\n\n' +
                                  localHistory.map(msg => `${msg.role.toUpperCase()}:\n${msg.content}`).join('\n\n');
 
               const replyText = await session.prompt(fullPrompt);
@@ -754,6 +810,11 @@ Available Tools:
               if (toolCall) {
                   localHistory.push({ role: 'model', content: replyText });
                   const toolResult = await executeTool(toolCall.tool_name, toolCall.arguments);
+                  
+                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && toolResult.logs_found > 0) {
+                      currentState = 'ANALYZING';
+                  }
+
                   localHistory.push({ role: 'tool', content: JSON.stringify(toolResult, null, 2) });
                   continue;
               }
@@ -781,10 +842,8 @@ Available Tools:
 
   const processWebLLM = async (userText: string) => {
       setIsLoading(true);
-      const webLlmHistory: any[] = [
-           { role: "system", content: getLocalSystemInstruction() },
-           { role: 'user', content: userText }
-      ];
+      const webLlmHistory: any[] = [];
+      let currentState: ConversationState = 'IDLE';
 
       let turnCount = 0;
       const MAX_TURNS = 10;
@@ -798,12 +857,20 @@ Available Tools:
                );
           }
           setDownloadProgress("");
+          
+          webLlmHistory.push({ role: 'user', content: userText });
 
           while (turnCount < MAX_TURNS) {
                turnCount++;
+               
+               const fullSystemPrompt = getLocalSystemInstruction(currentState);
+               const messagesForApi = [
+                   { role: "system", content: fullSystemPrompt },
+                   ...webLlmHistory
+               ];
 
                const reply = await webLlmEngineRef.current.chat.completions.create({
-                   messages: webLlmHistory,
+                   messages: messagesForApi,
                    temperature: 0.5,
                    max_tokens: 1024,
                });
@@ -814,6 +881,11 @@ Available Tools:
                if (toolCall) {
                   webLlmHistory.push({ role: 'assistant', content: replyText });
                   const toolResult = await executeTool(toolCall.tool_name, toolCall.arguments);
+                  
+                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && toolResult.logs_found > 0) {
+                      currentState = 'ANALYZING';
+                  }
+
                   webLlmHistory.push({ role: 'tool', content: JSON.stringify(toolResult, null, 2) });
                   continue;
                }
@@ -907,13 +979,15 @@ Available Tools:
 
       while (turnCount < MAX_TURNS) {
         turnCount++;
-        console.log(`[AI] Turn ${turnCount}/${MAX_TURNS} using ${modelName}`);
+        console.log(`[AI] Turn ${turnCount}/${MAX_TURNS} using ${modelName} in state: ${conversationStateRef.current}`);
+        
+        const availableTools = getAvailableTools(conversationStateRef.current);
         
         const result = await model.generateContent({
             model: modelName,
             contents: chatHistoryRef.current,
             config: {
-                tools: [{ functionDeclarations: [updateFiltersTool, scrollToLogTool, searchLogsTool, findLogPatternsTool, traceErrorOriginTool, suggestSolutionTool] }],
+                tools: [{ functionDeclarations: availableTools }],
             },
         });
 
@@ -929,6 +1003,12 @@ Available Tools:
 
              for (const call of functionCalls) {
                  const toolResult = await executeTool(call.name, call.args);
+                 
+                 if ((call.name === 'find_log_patterns' || call.name === 'search_logs') && (toolResult.logs_found > 0 || (toolResult.top_repeating_errors && toolResult.top_repeating_errors.length > 0))) {
+                     console.log("[AI State] Transitioning to ANALYZING after finding data.");
+                     conversationStateRef.current = 'ANALYZING';
+                 }
+
                  toolResponses.push({
                      functionResponse: {
                          name: call.name,
@@ -943,6 +1023,8 @@ Available Tools:
                     if (part.text) finalResponseText += part.text;
                 }
             }
+            console.log("[AI State] Resetting to IDLE after final answer.");
+            conversationStateRef.current = 'IDLE'; // Reset state after a final answer
             break;
         }
       }
@@ -974,16 +1056,33 @@ Available Tools:
       console.error("AI Error:", error);
       
       chatHistoryRef.current = chatHistoryRef.current.slice(0, historyStartIndex);
+      conversationStateRef.current = 'IDLE'; // Reset state on error
 
       let errorMessage = "I'm having trouble connecting to the AI right now.";
       
       if (typeof error === 'object' && error !== null) {
           const msg = error.message || JSON.stringify(error);
           if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-              errorMessage = "Rate limit exceeded. Try switching to a faster model (Fast/Balanced) or wait a moment.";
-              if (modelTier === 'gemini-3-pro-preview') {
-                  errorMessage += " Switching to Balanced automatically.";
-                  setModelTier('gemini-2.5-flash');
+              errorMessage = "Rate limit exceeded. Try switching to a faster model or wait a moment.";
+              try {
+                  const jsonMatch = msg.match(/{.*}/);
+                  if (jsonMatch) {
+                      const errorDetails = JSON.parse(jsonMatch[0]);
+                      const retryInfo = errorDetails.error?.details?.find((d: any) => d['@type']?.includes('RetryInfo'));
+                      if (retryInfo?.retryDelay) {
+                          const secondsMatch = retryInfo.retryDelay.match(/(\d+(\.\d+)?)/);
+                          if (secondsMatch) {
+                              const seconds = Math.ceil(parseFloat(secondsMatch[1]));
+                              errorMessage = `Rate limit exceeded. Please try again in about ${seconds} seconds.`;
+                          }
+                      }
+                      const usageLinkMatch = msg.match(/https:\/\/ai\.dev\/usage\?tab=rate-limit/);
+                      if (usageLinkMatch) {
+                          errorMessage += `\n\nTo monitor your usage, visit: ${usageLinkMatch[0]}`;
+                      }
+                  }
+              } catch (e) {
+                  console.warn("Could not parse detailed rate limit error:", e);
               }
           }
           if (msg.includes('API_KEY')) {
