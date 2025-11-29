@@ -337,6 +337,12 @@ const parseLocalToolCall = (text: string): { tool_name: string, arguments: any }
     return null;
 };
 
+const RATE_LIMITS: Record<string, number> = {
+    'gemini-2.5-pro': 2, // RPM
+    'gemini-2.5-flash': 10,
+    'gemini-flash-lite-latest': 15,
+};
+
 export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visibleLogs, allLogs, allDaemons, onUpdateFilters, onScrollToLog, savedFindings, onSaveFinding }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -363,6 +369,13 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
 
   // Conversation State Management
   const conversationStateRef = useRef<ConversationState>('IDLE');
+  
+  // Rate Limit Governor
+  const requestTimestampsRef = useRef<Record<string, number[]>>({
+    'gemini-2.5-pro': [],
+    'gemini-2.5-flash': [],
+    'gemini-flash-lite-latest': [],
+  });
 
   useEffect(() => {
       const storedKey = localStorage.getItem('nhc_log_viewer_api_key');
@@ -966,8 +979,75 @@ ${toolList}
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
+        const now = Date.now();
+        let effectiveModelName = modelTier;
+        let fallbackOccurred = false;
+
+        // --- Rate Limit Governor Logic ---
+        Object.keys(requestTimestampsRef.current).forEach(model => {
+            requestTimestampsRef.current[model] = requestTimestampsRef.current[model].filter(
+                ts => now - ts < 60000 // Prune timestamps older than 60 seconds
+            );
+        });
+
+        console.log('[Rate Limit Governor] Current requests in last 60s:', {
+            pro: requestTimestampsRef.current['gemini-2.5-pro'].length,
+            flash: requestTimestampsRef.current['gemini-2.5-flash'].length,
+            lite: requestTimestampsRef.current['gemini-flash-lite-latest'].length,
+        });
+
+        const checkAndFallback = () => {
+            const modelsInOrder = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-flash-lite-latest'];
+            const startIndex = modelsInOrder.indexOf(modelTier);
+            if (startIndex === -1) return modelTier; // Not a tiered cloud model
+
+            for (let i = startIndex; i < modelsInOrder.length; i++) {
+                const model = modelsInOrder[i];
+                const requests = requestTimestampsRef.current[model].length;
+                const limit = RATE_LIMITS[model];
+                console.log(`[Rate Limit Governor] Checking ${model}: ${requests} requests / ${limit} RPM limit.`);
+
+                if (requests < limit) {
+                    if (i > startIndex) {
+                        fallbackOccurred = true;
+                    }
+                    return model;
+                }
+            }
+            return null; // All models are rate-limited
+        };
+
+        const chosenModel = checkAndFallback();
+        if (!chosenModel) {
+            console.warn('[Rate Limit Governor] All cloud models are rate-limited.');
+            setMessages(prev => [...prev, {
+                id: Date.now().toString(),
+                role: 'model',
+                text: "All AI models are currently busy due to high traffic. Please wait about a minute before trying again.",
+                isError: true,
+            }]);
+            setIsLoading(false);
+            return;
+        }
+        effectiveModelName = chosenModel;
+
+        if (fallbackOccurred) {
+            const fromTier = modelTier.split('-').pop();
+            const toTier = effectiveModelName.split('-').pop();
+            setMessages(prev => [...prev, {
+                id: `fallback-${Date.now()}`,
+                role: 'model',
+                text: `**Notice:** The '${fromTier}' model is currently busy. Temporarily using the '${toTier}' model for this request to ensure a timely response.`,
+                isWarning: true,
+            }]);
+        }
+        
+        requestTimestampsRef.current[effectiveModelName].push(now);
+        console.log(`[Rate Limit Governor] Proceeding with model: ${effectiveModelName}`);
+        // --- End Governor Logic ---
+
       const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
-      const modelName = modelTier;
+      const modelName = effectiveModelName;
       const model = ai.models;
       
       const userContent: Content = { role: 'user', parts: [{ text: userText }] };
@@ -1158,7 +1238,7 @@ ${toolList}
                     >
                         <option value="gemini-flash-lite-latest">Fast</option>
                         <option value="gemini-2.5-flash">Balanced</option>
-                        <option value="gemini-3-pro-preview">Reasoning</option>
+                        <option value="gemini-2.5-pro">Reasoning</option>
                         <option value="local">Local (Chrome Nano)</option>
                         <option value="webllm">Local (WebLLM - Llama 3)</option>
                     </select>
@@ -1283,7 +1363,8 @@ ${toolList}
                             <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
                         </div>
                         <span className="text-[10px] text-gray-400">
-                            {modelTier === 'gemini-3-pro-preview' ? 'Reasoning...' : 
+                            {modelTier === 'gemini-2.5-pro' ? 'Reasoning...' :
+                             modelTier === 'gemini-2.5-flash' ? 'Analyzing...' :
                              modelTier === 'local' ? (downloadProgress ? 'Initializing...' : 'Processing locally (Nano)...') : 
                              modelTier === 'webllm' ? (downloadProgress ? 'Initializing...' : 'Thinking (Llama 3)...') :
                              'Analyzing logs...'}
