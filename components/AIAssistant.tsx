@@ -383,12 +383,13 @@ BEHAVIOR RULES:
 
 MULTI-STEP ANALYSIS (TOOL CHAINING):
 - For complex questions (e.g., "find the root cause of the most common error"), you MUST break the problem down into sequential steps.
-- **Formulate a Plan**: Think step-by-step. For the example above, your plan should be:
-    1. First, call \`find_log_patterns\` to identify the most frequent error.
-    2. Second, take the \`example_log_id\` from the result of the first tool.
-    3. Third, call \`trace_error_origin\` with that log ID to find the events that led to it.
-- **Execute Sequentially**: Use one tool, analyze the result, then decide on the next tool.
-- **Synthesize**: After completing your plan, combine all findings into a single, comprehensive final answer for the user.
+- **Think Before Acting**: Before your first tool call, briefly outline your plan. This is part of your internal thought process to structure the analysis.
+- **Formulate a Plan**: For the example above, your plan should be:
+    1. First, I will call \`find_log_patterns\` to identify the most frequent error message.
+    2. Second, I will take the \`example_log_id\` returned by that tool.
+    3. Third, I will call \`trace_error_origin\` using that specific ID to find the events that led up to it.
+- **Execute Sequentially**: Use one tool, analyze the result you get back, then decide on the next tool. Do not call multiple tools at once.
+- **Synthesize**: After completing all steps in your plan, combine all your findings into a single, comprehensive final answer for the user. Do not simply list the tool results.
 
 RESPONSE STYLE:
 - **Interpret, Don't Just List**: Provide a narrative summary of events. Explain the context behind the logs.
@@ -422,12 +423,13 @@ TOOL USAGE RULES:
 4.  **Final Answer**: After you have gathered enough information from the tools, provide a final, conversational answer in plain text. Do NOT use the JSON format for your final answer.
 
 MULTI-STEP ANALYSIS:
-- For complex questions, you can use tools sequentially.
-- **Example Plan**: To answer "find the root cause of the most common error", you would:
-    1. First, respond with the JSON for \`find_log_patterns\` with \`pattern_type: "repeating_error"\`.
-    2. You will then get a tool response containing the result, including an \`example_log_id\`.
-    3. Second, respond with the JSON for \`trace_error_origin\` using the \`error_log_id\` you received.
-    4. After you get the trace results, provide the final answer to the user in plain text.
+- For complex questions, you must use tools sequentially to gather information before providing a final answer.
+- **Example Plan**: To answer "find the root cause of the most common error", your sequence of actions would be:
+    1. **Action 1**: Respond with JSON to call \`find_log_patterns\` with \`pattern_type: "repeating_error"\`.
+    2. **Get Result**: The system will provide you with the result, which includes an \`example_log_id\`.
+    3. **Action 2**: Respond with JSON to call \`trace_error_origin\` using the \`error_log_id\` you just received.
+    4. **Get Result**: The system provides the trace results.
+    5. **Final Answer**: Now that you have all the information, respond with a final answer in plain text, synthesizing the findings.
 
 Available Tools:
 -   \`search_logs\`: Search the ENTIRE log file. Arguments: \`{"keywords": ["term1"], "match_mode": "OR"|"AND"}\`
@@ -708,7 +710,7 @@ Available Tools:
             } else {
                 const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
                 const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: [{ role: 'user', parts: [{ text: solutionPrompt }] }] });
-                solutionText = result.text || "Could not generate a solution.";
+                solutionText = result.candidates?.[0]?.content?.parts?.[0]?.text || "Could not generate a solution.";
             }
             return { result: "Here is a potential solution:", solution: solutionText };
         } catch (e) {
