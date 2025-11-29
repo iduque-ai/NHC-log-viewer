@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+// FIX: Imported `useMemo` from React to resolve reference error.
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { GoogleGenAI, Type, FunctionDeclaration, Content, Part } from "@google/genai";
 import { CreateMLCEngine } from "@mlc-ai/web-llm";
 import { LogEntry, FilterState } from '../types.ts';
@@ -108,7 +109,7 @@ const searchLogsTool: FunctionDeclaration = {
       },
       limit: {
         type: Type.NUMBER,
-        description: 'Maximum number of logs to return (default 50).',
+        description: 'Maximum number of logs to return (default 100).',
       },
     },
     required: ['keywords'],
@@ -337,12 +338,6 @@ const parseLocalToolCall = (text: string): { tool_name: string, arguments: any }
     return null;
 };
 
-const RATE_LIMITS: Record<string, number> = {
-    'gemini-2.5-pro': 2, // RPM
-    'gemini-2.5-flash': 10,
-    'gemini-flash-lite-latest': 15,
-};
-
 export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visibleLogs, allLogs, allDaemons, onUpdateFilters, onScrollToLog, savedFindings, onSaveFinding }) => {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -370,13 +365,6 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   // Conversation State Management
   const conversationStateRef = useRef<ConversationState>('IDLE');
   
-  // Rate Limit Governor
-  const requestTimestampsRef = useRef<Record<string, number[]>>({
-    'gemini-2.5-pro': [],
-    'gemini-2.5-flash': [],
-    'gemini-flash-lite-latest': [],
-  });
-
   useEffect(() => {
       const storedKey = localStorage.getItem('nhc_log_viewer_api_key');
       if (storedKey) {
@@ -406,11 +394,38 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   // Ref to hold the WebLLM engine instance to avoid re-init
   const webLlmEngineRef = useRef<any>(null);
 
-  const getCloudSystemInstruction = () => ({
-        role: 'user',
+  const logFileContext = useMemo(() => {
+    if (allLogs.length === 0) return "CONTEXT: No logs have been loaded.";
+
+    const startTime = allLogs[0]?.timestamp.toISOString() || 'N/A';
+    const endTime = allLogs[allLogs.length - 1]?.timestamp.toISOString() || 'N/A';
+    
+    const levelCounts = allLogs.reduce((acc, log) => {
+        acc[log.level] = (acc[log.level] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+
+    const levelSummary = Object.entries(levelCounts)
+        .map(([level, count]) => `${level}: ${count}`)
+        .join(', ');
+
+    return `
+LOG FILE CONTEXT:
+This is a summary of the entire log file you are analyzing. Use this information to inform your tool usage and analysis.
+- Total Logs: ${allLogs.length}
+- Time Range: ${startTime} to ${endTime}
+- Available Daemons: [${allDaemons.join(', ')}]
+- Log Level Distribution: ${levelSummary}
+`;
+  }, [allLogs, allDaemons]);
+
+  const getCloudSystemInstruction = useCallback((logContext: string) => ({
+        role: 'user' as const,
         parts: [{ text: `
 System Instruction: 
 You are an expert log analyst and debugging assistant. Your goal is to help the user understand and solve issues in their application logs.
+
+${logContext}
 
 BEHAVIOR RULES:
 1. **Analyze First**: Always use the \`search_logs\`, \`find_log_patterns\`, or \`trace_error_origin\` tools to find relevant information before answering. Do not guess.
@@ -436,7 +451,7 @@ RESPONSE STYLE:
 - **Be Conversational**: Write naturally. Use paragraphs and bullet points for readability.
 - **Cite Evidence**: Weave [Log ID: <id>] references into your sentences as proof for your analysis.
 ` }]
-  });
+  }), []);
 
   const getLocalSystemInstruction = (state: ConversationState) => {
     const availableTools = getAvailableTools(state);
@@ -471,13 +486,24 @@ ${toolList}
 `;
   };
 
-  const chatHistoryRef = useRef<Content[]>([
-    getCloudSystemInstruction() as Content,
-    {
-        role: 'model',
+  const chatHistoryRef = useRef<Content[]>([]);
+
+  // This effect will initialize and update the chat history with the system prompt
+  useEffect(() => {
+    const systemInstruction = getCloudSystemInstruction(logFileContext) as Content;
+    const modelAck = {
+        role: 'model' as const,
         parts: [{ text: "Understood. I will act as an expert log analyst, using all available tools to proactively find, analyze, and suggest solutions for issues, always citing log IDs and communicating in a clear, conversational manner." }]
+    };
+
+    if (chatHistoryRef.current.length === 0) {
+        // First time initialization
+        chatHistoryRef.current = [systemInstruction, modelAck];
+    } else {
+        // Update system prompt if context changes (e.g., more files added)
+        chatHistoryRef.current[0] = systemInstruction;
     }
-  ]);
+  }, [logFileContext, getCloudSystemInstruction]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -509,21 +535,21 @@ ${toolList}
     }
   }, [isOpen, savedFindings, messages]);
 
-  const handleResetChat = () => {
+  const handleResetChat = useCallback(() => {
       setMessages([{ 
           id: 'welcome', 
           role: 'model', 
           text: 'Chat history cleared. How can I help you analyze the logs?' 
       }]);
       chatHistoryRef.current = [
-        getCloudSystemInstruction() as Content,
+        getCloudSystemInstruction(logFileContext) as Content,
         {
             role: 'model',
             parts: [{ text: "Understood. I will act as an expert log analyst, using all available tools to proactively find, analyze, and suggest solutions for issues, always citing log IDs and communicating in a clear, conversational manner." }]
         }
       ];
       conversationStateRef.current = 'IDLE';
-  };
+  }, [logFileContext, getCloudSystemInstruction]);
 
   const handleWebLlmConsentAccept = () => {
       localStorage.setItem(WEBLMM_CONSENT_KEY, 'true');
@@ -593,7 +619,7 @@ ${toolList}
         }
 
         const matchMode = args.match_mode || 'OR';
-        const limit = args.limit || 50;
+        const limit = args.limit || 100;
         
         if (keywords.length === 0) return { summary: "Empty query.", logs_found: 0 };
 
@@ -778,7 +804,7 @@ ${toolList}
             } else {
                 const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
                 const result = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: [{ role: 'user', parts: [{ text: solutionPrompt }] }] });
-                solutionText = result.candidates?.[0]?.content?.parts?.[0]?.text || "Could not generate a solution.";
+                solutionText = result.text || "Could not generate a solution.";
             }
             return { result: "Here is a potential solution:", solution: solutionText };
         } catch (e) {
@@ -813,6 +839,7 @@ ${toolList}
 
           while (turnCount < MAX_TURNS) {
               turnCount++;
+              console.log(`[AI] Turn ${turnCount}/${MAX_TURNS} using Local AI (Nano) in state: ${currentState}`);
 
               const fullPrompt = getLocalSystemInstruction(currentState) + '\n\n--- CHAT HISTORY ---\n\n' +
                                  localHistory.map(msg => `${msg.role.toUpperCase()}:\n${msg.content}`).join('\n\n');
@@ -824,14 +851,16 @@ ${toolList}
                   localHistory.push({ role: 'model', content: replyText });
                   const toolResult = await executeTool(toolCall.tool_name, toolCall.arguments);
                   
-                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && toolResult.logs_found > 0) {
+                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && (toolResult.logs_found > 0 || (toolResult.top_repeating_errors && toolResult.top_repeating_errors.length > 0))) {
+                      console.log("[AI State] Transitioning to ANALYZING after finding data.");
                       currentState = 'ANALYZING';
                   }
 
                   localHistory.push({ role: 'tool', content: JSON.stringify(toolResult, null, 2) });
                   continue;
               }
-
+              
+              console.log("[AI State] Resetting to IDLE after final answer.");
               setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: replyText + "\n\n*(Generated locally on-device)*" }]);
               session.destroy();
               return;
@@ -875,6 +904,7 @@ ${toolList}
 
           while (turnCount < MAX_TURNS) {
                turnCount++;
+               console.log(`[AI] Turn ${turnCount}/${MAX_TURNS} using WebLLM in state: ${currentState}`);
                
                const fullSystemPrompt = getLocalSystemInstruction(currentState);
                const messagesForApi = [
@@ -895,7 +925,8 @@ ${toolList}
                   webLlmHistory.push({ role: 'assistant', content: replyText });
                   const toolResult = await executeTool(toolCall.tool_name, toolCall.arguments);
                   
-                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && toolResult.logs_found > 0) {
+                  if ((toolCall.tool_name === 'find_log_patterns' || toolCall.tool_name === 'search_logs') && (toolResult.logs_found > 0 || (toolResult.top_repeating_errors && toolResult.top_repeating_errors.length > 0))) {
+                      console.log("[AI State] Transitioning to ANALYZING after finding data.");
                       currentState = 'ANALYZING';
                   }
 
@@ -903,6 +934,7 @@ ${toolList}
                   continue;
                }
                
+               console.log("[AI State] Resetting to IDLE after final answer.");
                setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: replyText + "\n\n*(Generated locally via WebLLM)*" }]);
                return;
           }
@@ -979,76 +1011,8 @@ ${toolList}
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
-        const now = Date.now();
-        let effectiveModelName = modelTier;
-        let fallbackOccurred = false;
-
-        // --- Rate Limit Governor Logic ---
-        Object.keys(requestTimestampsRef.current).forEach(model => {
-            requestTimestampsRef.current[model] = requestTimestampsRef.current[model].filter(
-                ts => now - ts < 60000 // Prune timestamps older than 60 seconds
-            );
-        });
-
-        console.log('[Rate Limit Governor] Current requests in last 60s:', {
-            pro: requestTimestampsRef.current['gemini-2.5-pro'].length,
-            flash: requestTimestampsRef.current['gemini-2.5-flash'].length,
-            lite: requestTimestampsRef.current['gemini-flash-lite-latest'].length,
-        });
-
-        const checkAndFallback = () => {
-            const modelsInOrder = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-flash-lite-latest'];
-            const startIndex = modelsInOrder.indexOf(modelTier);
-            if (startIndex === -1) return modelTier; // Not a tiered cloud model
-
-            for (let i = startIndex; i < modelsInOrder.length; i++) {
-                const model = modelsInOrder[i];
-                const requests = requestTimestampsRef.current[model].length;
-                const limit = RATE_LIMITS[model];
-                console.log(`[Rate Limit Governor] Checking ${model}: ${requests} requests / ${limit} RPM limit.`);
-
-                if (requests < limit) {
-                    if (i > startIndex) {
-                        fallbackOccurred = true;
-                    }
-                    return model;
-                }
-            }
-            return null; // All models are rate-limited
-        };
-
-        const chosenModel = checkAndFallback();
-        if (!chosenModel) {
-            console.warn('[Rate Limit Governor] All cloud models are rate-limited.');
-            setMessages(prev => [...prev, {
-                id: Date.now().toString(),
-                role: 'model',
-                text: "All AI models are currently busy due to high traffic. Please wait about a minute before trying again.",
-                isError: true,
-            }]);
-            setIsLoading(false);
-            return;
-        }
-        effectiveModelName = chosenModel;
-
-        if (fallbackOccurred) {
-            const fromTier = modelTier.split('-').pop();
-            const toTier = effectiveModelName.split('-').pop();
-            setMessages(prev => [...prev, {
-                id: `fallback-${Date.now()}`,
-                role: 'model',
-                text: `**Notice:** The '${fromTier}' model is currently busy. Temporarily using the '${toTier}' model for this request to ensure a timely response.`,
-                isWarning: true,
-            }]);
-        }
-        
-        requestTimestampsRef.current[effectiveModelName].push(now);
-        console.log(`[Rate Limit Governor] Proceeding with model: ${effectiveModelName}`);
-        // --- End Governor Logic ---
-
       const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
-      const modelName = effectiveModelName;
-      const model = ai.models;
+      const modelName = modelTier;
       
       const userContent: Content = { role: 'user', parts: [{ text: userText }] };
       chatHistoryRef.current = [...chatHistoryRef.current, userContent];
@@ -1063,7 +1027,7 @@ ${toolList}
         
         const availableTools = getAvailableTools(conversationStateRef.current);
         
-        const result = await model.generateContent({
+        const result = await ai.models.generateContent({
             model: modelName,
             contents: chatHistoryRef.current,
             config: {
@@ -1098,11 +1062,7 @@ ${toolList}
              }
              chatHistoryRef.current.push({ role: 'user', parts: toolResponses });
         } else {
-            if (responseContent.parts) {
-                for (const part of responseContent.parts) {
-                    if (part.text) finalResponseText += part.text;
-                }
-            }
+            finalResponseText = result.text ?? '';
             console.log("[AI State] Resetting to IDLE after final answer.");
             conversationStateRef.current = 'IDLE'; // Reset state after a final answer
             break;
@@ -1117,12 +1077,12 @@ ${toolList}
           };
           chatHistoryRef.current.push(summaryPrompt);
           
-          const finalResult = await model.generateContent({
+          const finalResult = await ai.models.generateContent({
             model: modelName,
             contents: chatHistoryRef.current,
           });
           
-          finalResponseText = finalResult.candidates?.[0]?.content?.parts?.[0]?.text || "I was unable to complete the analysis in the allotted time.";
+          finalResponseText = finalResult.text || "I was unable to complete the analysis in the allotted time.";
           chatHistoryRef.current.push(finalResult.candidates?.[0]?.content as Content);
       }
 
@@ -1238,7 +1198,7 @@ ${toolList}
                     >
                         <option value="gemini-flash-lite-latest">Fast</option>
                         <option value="gemini-2.5-flash">Balanced</option>
-                        <option value="gemini-2.5-pro">Reasoning</option>
+                        <option value="gemini-3-pro-preview">Reasoning</option>
                         <option value="local">Local (Chrome Nano)</option>
                         <option value="webllm">Local (WebLLM - Llama 3)</option>
                     </select>
@@ -1363,7 +1323,7 @@ ${toolList}
                             <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
                         </div>
                         <span className="text-[10px] text-gray-400">
-                            {modelTier === 'gemini-2.5-pro' ? 'Reasoning...' :
+                            {modelTier === 'gemini-3-pro-preview' ? 'Reasoning...' :
                              modelTier === 'gemini-2.5-flash' ? 'Analyzing...' :
                              modelTier === 'local' ? (downloadProgress ? 'Initializing...' : 'Processing locally (Nano)...') : 
                              modelTier === 'webllm' ? (downloadProgress ? 'Initializing...' : 'Thinking (Llama 3)...') :
