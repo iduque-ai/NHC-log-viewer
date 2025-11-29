@@ -1,6 +1,7 @@
 
 
 
+
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { ungzip } from 'pako';
@@ -489,9 +490,12 @@ const App: React.FC = () => {
     allLogs.sort((a, b) => {
         const timeDiff = a.timestamp.getTime() - b.timestamp.getTime();
         if (timeDiff !== 0) return timeDiff;
-        return a.id - b.id;
+        // Use original parse ID for stable sort before re-indexing
+        return a.id - b.id; 
     });
-    return allLogs;
+    // Re-assign IDs to match the sorted order (1-indexed). This makes the log ID
+    // correspond to its visual line number in the unfiltered view, fixing scroll bugs.
+    return allLogs.map((log, index) => ({ ...log, id: index + 1 }));
   }, [fileInfos]);
 
   const globalDateRange = useMemo<[Date | null, Date | null]>(() => {
@@ -949,6 +953,7 @@ const App: React.FC = () => {
                     onImportFilters={handleImportFilters}
                     isAllLogs={activeTab.id === tabs[0]?.id}
                     onCloseMobile={() => setIsSidebarOpen(false)}
+                    onCollapse={() => setIsSidebarOpen(false)}
                   />
              </div>
           )}
@@ -957,15 +962,17 @@ const App: React.FC = () => {
             {/* Header */}
             <div className="flex-shrink-0 bg-gray-900 border-b border-gray-700 flex items-center justify-between pr-2">
               <div className="flex items-center">
-                  <button 
-                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                    className="p-2 text-gray-400 hover:text-white border-r border-gray-700 h-full"
-                    title={isSidebarOpen ? "Collapse Sidebar" : "Expand Sidebar"}
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d={isSidebarOpen ? "M4 6h16M4 12h16M4 18h16" : "M4 6h16M4 12h16M4 18h16"} />
-                    </svg>
-                  </button>
+                  {!isSidebarOpen && (
+                    <button 
+                      onClick={() => setIsSidebarOpen(true)}
+                      className="p-2 text-gray-400 hover:text-white border-r border-gray-700 h-full"
+                      title="Expand Sidebar"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+                      </svg>
+                    </button>
+                  )}
                   <div className="flex overflow-x-auto">
                     {tabs.map((tab, index) => {
                       const isAllLogsTab = index === 0;

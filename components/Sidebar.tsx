@@ -1,4 +1,3 @@
-
 import React, { useMemo } from 'react';
 import { FilterState, LogLevel, FileInfo } from '../types.ts';
 import { CustomMultiSelect } from './CustomMultiSelect.tsx';
@@ -27,6 +26,7 @@ interface SidebarProps {
   onImportFilters: (file: File) => void;
   isAllLogs: boolean;
   onCloseMobile?: () => void;
+  onCollapse: () => void;
 }
 
 const logLevels = Object.values(LogLevel);
@@ -349,6 +349,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onImportFilters,
   isAllLogs,
   onCloseMobile,
+  onCollapse,
 }) => {
   const { selectedLevels, selectedDaemons, selectedModules, selectedFunctionNames, dateRange, keywordQueries, keywordMatchMode, enableKeywordHighlight } = filterState;
   const filtersDisabledEffective = filtersDisabled || isLoading;
@@ -389,13 +390,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-60 bg-gray-800 flex flex-col p-2 border-r border-gray-700 h-full text-xs overflow-hidden">
       <div className="flex justify-between items-center mb-2">
         <h1 className="text-base font-bold text-white truncate">NHC Log Viewer</h1>
-        <button 
-           onClick={onCloseMobile}
-           className="md:hidden p-1 text-gray-400 hover:text-white rounded-md hover:bg-gray-700"
-           aria-label="Close sidebar"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-        </button>
+        <div className="flex items-center">
+            <button 
+               onClick={onCollapse}
+               className="hidden md:block p-1 text-gray-400 hover:text-white rounded-md hover:bg-gray-700"
+               title="Collapse sidebar"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <button 
+               onClick={onCloseMobile}
+               className="md:hidden p-1 text-gray-400 hover:text-white rounded-md hover:bg-gray-700"
+               aria-label="Close sidebar"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+        </div>
       </div>
 
       <DataSources
