@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { Analytics } from '@vercel/analytics/react';
 // FIX: Added .tsx extension for native browser module resolution.
 import App from './App.tsx';
+import './index.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

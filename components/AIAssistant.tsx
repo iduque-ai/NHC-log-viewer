@@ -18,6 +18,7 @@ interface Message {
   role: 'user' | 'model';
   text: string;
   isError?: boolean;
+  isWarning?: boolean;
 }
 
 // Extend Window interface for Chrome's Built-in AI
@@ -223,6 +224,7 @@ const FormattedMessage: React.FC<{ text: string; onScrollToLog: (id: number) => 
 
 // WebLLM Model ID
 const WEB_LLM_MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+const WEBLMM_CONSENT_KEY = 'nhc_log_viewer_webllm_consent';
 
 export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visibleLogs, allLogs, allDaemons, onUpdateFilters, onScrollToLog }) => {
   const [input, setInput] = useState('');
@@ -241,6 +243,7 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   const [showWebLlmConsent, setShowWebLlmConsent] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const cloudPrivacyWarningShown = useRef(false);
 
   // API Key Management
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -276,7 +279,7 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   // Ref to hold the WebLLM engine instance to avoid re-init
   const webLlmEngineRef = useRef<any>(null);
 
-  const getSystemInstruction = () => ({
+  const getCloudSystemInstruction = () => ({
         role: 'user',
         parts: [{ text: `
 System Instruction: 
@@ -307,8 +310,53 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
 ` }]
   });
 
+  const getLocalSystemInstruction = () => `
+System Instruction:
+You are an expert log analyst. Your goal is to help the user understand their application logs by using the tools available to you.
+
+TOOL USAGE RULES:
+1.  **Analyze First**: Always use the \`search_logs\` tool to find relevant information before answering. Do not guess.
+2.  **How to Use Tools**: To use a tool, you MUST respond with ONLY a valid JSON object in the following format. Do not add any other text before or after the JSON.
+    \`\`\`json
+    {
+      "tool_name": "name_of_the_tool",
+      "arguments": {
+        "arg1": "value1",
+        "arg2": ["value2"]
+      }
+    }
+    \`\`\`
+3.  **Strict Formatting**: When referring to a specific log line in your final text answer, YOU MUST use the format: [Log ID: <number>].
+4.  **Final Answer**: After you have gathered enough information from the tools, provide a final, conversational answer in plain text. Do NOT use the JSON format for your final answer.
+
+RESPONSE STYLE (for final answers):
+-   **Interpret, Don't Just List**: Provide a narrative summary of events.
+-   **Be Conversational**: Write naturally.
+-   **Cite Evidence**: Weave [Log ID: <id>] references into your sentences.
+
+Available Tools:
+-   \`search_logs\`: Search the ENTIRE log file. Arguments: \`{"keywords": ["term1", "term2"], "match_mode": "OR"|"AND", "limit": 50}\`
+-   \`scroll_to_log\`: Jump the user's view to a specific line. Arguments: \`{"log_id": 123}\`
+-   \`update_filters\`: Create a NEW tab with specific filters. Arguments: \`{"log_levels": ["ERROR"], "daemons": ["httpd"]}\`
+
+Example Interaction:
+User: "show me httpd errors"
+You:
+\`\`\`json
+{
+  "tool_name": "update_filters",
+  "arguments": {
+    "daemons": ["httpd"],
+    "log_levels": ["ERROR"]
+  }
+}
+\`\`\`
+(The system will execute this and return a confirmation message. Then you provide the final text answer.)
+You: I have opened a new tab showing all "ERROR" level logs from the "httpd" daemon.
+`;
+
   const chatHistoryRef = useRef<Content[]>([
-    getSystemInstruction() as Content,
+    getCloudSystemInstruction() as Content,
     {
         role: 'model',
         parts: [{ text: "Understood. I will analyze logs using tools, strict [Log ID: <id>] formatting, and synonym-based search. I will provide conversational, interpretive responses while citing evidence." }]
@@ -330,7 +378,7 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
           text: 'Chat history cleared. How can I help you analyze the logs?' 
       }]);
       chatHistoryRef.current = [
-        getSystemInstruction() as Content,
+        getCloudSystemInstruction() as Content,
         {
             role: 'model',
             parts: [{ text: "Understood. I will analyze logs using tools, strict [Log ID: <id>] formatting, and synonym-based search. I will provide conversational, interpretive responses while citing evidence." }]
@@ -339,6 +387,7 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
   };
 
   const handleWebLlmConsentAccept = () => {
+      localStorage.setItem(WEBLMM_CONSENT_KEY, 'true');
       setShowWebLlmConsent(false);
       if (pendingPrompt) {
           setIsLoading(true);
@@ -485,6 +534,13 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
   };
 
   const processLocalAI = async (userText: string) => {
+      setIsLoading(true);
+      const localHistory: { role: 'user' | 'model' | 'tool'; content: string }[] = [];
+      localHistory.push({ role: 'user', content: userText });
+      
+      let turnCount = 0;
+      const MAX_TURNS = 5; // Keep loops short for less capable models
+
       try {
           if (!window.ai?.languageModel) {
             throw new Error("Local AI (Gemini Nano) is not available in this browser. This feature requires the latest Chrome with the 'Prompt API for Gemini Nano' flag enabled.");
@@ -492,42 +548,41 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
           
           setDownloadProgress("Checking local model availability...");
           const capabilities = await window.ai.languageModel.capabilities();
+          if (capabilities.available === 'no') throw new Error("Local AI (Gemini Nano) is not supported by your device.");
+          if (capabilities.available === 'after-download') setDownloadProgress("Downloading Gemini Nano model...");
 
-          if (capabilities.available === 'no') {
-              throw new Error("Local AI (Gemini Nano) is not supported by your device or browser version.");
+          const session = await window.ai.languageModel.create({ outputLanguage: 'en' });
+          setDownloadProgress("");
+
+          while (turnCount < MAX_TURNS) {
+              turnCount++;
+
+              // Build a single prompt string including system instructions and history
+              const fullPrompt = getLocalSystemInstruction() + '\n\n--- CHAT HISTORY ---\n\n' +
+                                 localHistory.map(msg => `${msg.role.toUpperCase()}:\n${msg.content}`).join('\n\n');
+
+              const replyText = await session.prompt(fullPrompt);
+
+              const trimmedReply = replyText.trim();
+              if (trimmedReply.startsWith('{') && trimmedReply.endsWith('}')) {
+                  try {
+                      const toolCall = JSON.parse(trimmedReply);
+                      if (toolCall.tool_name && toolCall.arguments) {
+                           localHistory.push({ role: 'model', content: trimmedReply });
+                           const toolResult = executeTool(toolCall.tool_name, toolCall.arguments);
+                           localHistory.push({ role: 'tool', content: JSON.stringify(toolResult, null, 2) });
+                           continue;
+                      }
+                  } catch (e) { /* Not valid JSON, treat as final answer */ }
+              }
+
+              // Not a tool call, this is the final answer.
+              setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: replyText + "\n\n*(Generated locally on-device)*" }]);
+              session.destroy();
+              return;
           }
 
-          if (capabilities.available === 'after-download') {
-              setDownloadProgress("Downloading Gemini Nano model... This may take a moment.");
-          } else {
-              setDownloadProgress("");
-          }
-
-          const session = await window.ai.languageModel.create({
-              systemPrompt: "You are a log analysis assistant. Answer briefly based on the logs provided. Tools are NOT available in this mode. Do not ask to filter or scroll, just analyze.",
-              outputLanguage: 'en'
-          });
-          
-          setDownloadProgress(""); // Clear progress after creation
-
-          // Local AI context window is small. We can only pass a summary of visible logs.
-          const visibleLogSummary = visibleLogs.slice(0, 30).map(l => 
-              `${l.timestamp.toISOString()} [${l.level}] ${l.daemon}: ${l.message}`
-          ).join('\n');
-
-          const prompt = `
-Context (First 30 visible logs):
-${visibleLogSummary}
-
-User Question: ${userText}
-          `;
-
-          const result = await session.prompt(prompt);
-          
-          // Cleanup
-          session.destroy();
-          
-          setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: result + "\n\n*(Generated locally on-device)*" }]);
+          throw new Error("The local model could not complete the request in the allotted time.");
 
       } catch (error: any) {
           console.error("Local AI Error:", error);
@@ -539,77 +594,78 @@ User Question: ${userText}
            }]);
       } finally {
           setIsLoading(false);
-          setDownloadProgress(""); // Ensure it's cleared on error
+          setDownloadProgress("");
       }
   };
 
   const processWebLLM = async (userText: string) => {
-    try {
-        if (!webLlmEngineRef.current) {
-             setDownloadProgress("Initializing engine...");
-             const engine = await CreateMLCEngine(
-                 WEB_LLM_MODEL_ID,
-                 {
-                     initProgressCallback: (report) => {
-                         setDownloadProgress(report.text);
-                     }
-                 }
-             );
-             webLlmEngineRef.current = engine;
-        }
+      setIsLoading(true);
+      const webLlmHistory: any[] = [
+           { role: "system", content: getLocalSystemInstruction() },
+           { role: 'user', content: userText }
+      ];
 
-        setDownloadProgress(""); // Clear progress after init
+      let turnCount = 0;
+      const MAX_TURNS = 5;
 
-        // WebLLM Context Preparation
-        const visibleLogSummary = visibleLogs.slice(0, 50).map(l => 
-            `${l.timestamp.toISOString()} [${l.level}] ${l.daemon}: ${l.message}`
-        ).join('\n');
+      try {
+          if (!webLlmEngineRef.current) {
+               setDownloadProgress("Initializing engine...");
+               webLlmEngineRef.current = await CreateMLCEngine(
+                   WEB_LLM_MODEL_ID,
+                   { initProgressCallback: (report) => setDownloadProgress(report.text) }
+               );
+          }
+          setDownloadProgress("");
 
-        const systemPrompt = `You are a log analysis assistant. Answer based on the logs provided. Be concise.`;
-        const contextPrompt = `Here are the first 50 visible logs for context:\n${visibleLogSummary}`;
+          while (turnCount < MAX_TURNS) {
+               turnCount++;
 
-        const messagesForWebLLM: any[] = [
-            { role: "system", content: systemPrompt },
-            // Add previous messages (simplified)
-            ...messages.filter(m => !m.isError && m.id !== 'welcome').map(m => ({ 
-                role: m.role === 'model' ? 'assistant' : 'user', 
-                content: m.text 
-            })),
-            { role: "user", content: `Context:\n${contextPrompt}\n\nQuestion: ${userText}` }
-        ];
-        
-        // Keep history manageable
-        if (messagesForWebLLM.length > 10) {
-             messagesForWebLLM.splice(1, messagesForWebLLM.length - 10);
-        }
+               const reply = await webLlmEngineRef.current.chat.completions.create({
+                   messages: webLlmHistory,
+                   temperature: 0.5,
+                   max_tokens: 1024,
+               });
 
-        const reply = await webLlmEngineRef.current.chat.completions.create({
-            messages: messagesForWebLLM,
-            temperature: 0.5,
-            max_tokens: 1024,
-        });
+               const replyText = reply.choices[0].message.content || "";
+               
+               const trimmedReply = replyText.trim();
+               if (trimmedReply.startsWith('{') && trimmedReply.endsWith('}')) {
+                  try {
+                      const toolCall = JSON.parse(trimmedReply);
+                      if (toolCall.tool_name && toolCall.arguments) {
+                          webLlmHistory.push({ role: 'assistant', content: trimmedReply });
+                          const toolResult = executeTool(toolCall.tool_name, toolCall.arguments);
+                          webLlmHistory.push({ role: 'tool', content: JSON.stringify(toolResult, null, 2) });
+                          continue;
+                      }
+                  } catch (e) { /* Not valid JSON, treat as final answer */ }
+               }
+               
+               setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: replyText + "\n\n*(Generated locally via WebLLM)*" }]);
+               return;
+          }
 
-        const replyText = reply.choices[0].message.content || "No response generated.";
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: replyText + "\n\n*(Generated locally via WebLLM)*" }]);
+          throw new Error("The local model could not complete the request in the allotted time.");
 
-    } catch (error: any) {
-        console.error("WebLLM Error:", error);
-        let errorMsg = "Error running WebLLM: " + (error.message || "Unknown error");
-        if (error.message?.includes("WebGPU")) {
-            errorMsg = "WebGPU is not supported or enabled in this browser. Please use Chrome/Edge and ensure hardware acceleration is on.";
-        } else if (error.message?.includes("Cache")) {
-            errorMsg = "Failed to download model. Please check your internet connection or firewall. (Cache Error)";
-        }
-        setMessages(prev => [...prev, { 
-            id: Date.now().toString(), 
-            role: 'model', 
-            text: errorMsg, 
-            isError: true 
-        }]);
-    } finally {
-        setIsLoading(false);
-        setDownloadProgress("");
-    }
+      } catch (error: any) {
+          console.error("WebLLM Error:", error);
+          let errorMsg = "Error running WebLLM: " + (error.message || "Unknown error");
+          if (error.message?.includes("WebGPU")) {
+              errorMsg = "WebGPU is not supported or enabled in this browser. Please use Chrome/Edge and ensure hardware acceleration is on.";
+          } else if (error.message?.includes("Cache")) {
+              errorMsg = "Failed to download model. Please check your internet connection or firewall. (Cache Error)";
+          }
+          setMessages(prev => [...prev, { 
+              id: Date.now().toString(), 
+              role: 'model', 
+              text: errorMsg, 
+              isError: true 
+          }]);
+      } finally {
+          setIsLoading(false);
+          setDownloadProgress("");
+      }
   };
 
   const processUserMessage = async (userText: string) => {
@@ -621,18 +677,30 @@ User Question: ${userText}
     }
     
     if (modelTier === 'webllm') {
-        // If engine isn't loaded, ask for consent to download first.
-        if (!webLlmEngineRef.current) {
+        const hasConsented = localStorage.getItem(WEBLMM_CONSENT_KEY) === 'true';
+
+        if (!webLlmEngineRef.current && !hasConsented) {
             setPendingPrompt(userText);
             setShowWebLlmConsent(true);
             return;
         }
+        
         setIsLoading(true);
         processWebLLM(userText);
         return;
     }
 
-    // Determine API Key: Prioritize VITE_API_KEY (set at build), fallback to user localStorage
+    // Show privacy warning on first cloud use
+    if (!cloudPrivacyWarningShown.current) {
+        setMessages(prev => [...prev, {
+            id: `privacy-warning-${Date.now()}`,
+            role: 'model',
+            text: '**Privacy Notice:** You are using a cloud-based AI model. To answer your questions, a summary of relevant logs will be sent to Google for analysis. For 100% on-device processing, please select a "Local" model from the dropdown menu.',
+            isWarning: true,
+        }]);
+        cloudPrivacyWarningShown.current = true;
+    }
+
     const effectiveApiKey = import.meta.env.VITE_API_KEY || userApiKey;
 
     if (!effectiveApiKey) {
@@ -642,18 +710,15 @@ User Question: ${userText}
           text: 'Error: API Key is missing. Please click the Settings icon (⚙️) above to enter your Google Gemini API Key.', 
           isError: true 
       }]);
-      setIsSettingsOpen(true); // Open settings to prompt user
+      setIsSettingsOpen(true);
       return;
     }
 
     setIsLoading(true);
-    // Capture the history state before adding the new message.
-    // If an error occurs, we rollback to this index to clean the context.
     const historyStartIndex = chatHistoryRef.current.length;
 
     try {
       const ai = new GoogleGenAI({ apiKey: effectiveApiKey });
-      // Use the selected model tier directly as the model name
       const modelName = modelTier;
       const model = ai.models;
       
@@ -732,7 +797,6 @@ User Question: ${userText}
     } catch (error: any) {
       console.error("AI Error:", error);
       
-      // Rollback history to clean up the failed interaction
       chatHistoryRef.current = chatHistoryRef.current.slice(0, historyStartIndex);
 
       let errorMessage = "I'm having trouble connecting to the AI right now.";
@@ -770,13 +834,10 @@ User Question: ${userText}
   const handleRetry = (errorMsgId: string) => {
       if (isLoading) return;
       
-      // Find the last user message to retry
       const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
       
       if (lastUserMsg) {
-          // Remove the error message from the UI
           setMessages(prev => prev.filter(m => m.id !== errorMsgId));
-          // Re-process the last user message
           processUserMessage(lastUserMsg.text);
       }
   };
@@ -785,8 +846,11 @@ User Question: ${userText}
     if (isLoading) return;
     
     let prompt = "";
-    if (action === 'summarize') prompt = "Summarize the key events in the current visible logs.";
-    if (action === 'errors') prompt = "Find critical failures in the entire log file and explain the root cause.";
+    if (action === 'summarize') {
+      prompt = "Summarize the key events by searching the entire log file.";
+    } else if (action === 'errors') {
+      prompt = "Find critical failures in the entire log file and explain the root cause.";
+    }
 
     setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', text: prompt }]);
     processUserMessage(prompt);
@@ -847,18 +911,16 @@ User Question: ${userText}
       <div className="p-3 grid grid-cols-2 gap-2 border-b border-gray-700 bg-gray-800/50">
         <button 
             onClick={() => handleQuickAction('summarize')}
-            disabled={isLoading || visibleLogs.length === 0 || modelTier === 'local' || modelTier === 'webllm'}
+            disabled={isLoading || visibleLogs.length === 0}
             className="flex items-center justify-center space-x-1 bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 px-3 rounded text-xs font-medium transition-colors disabled:opacity-50"
-            title={modelTier === 'webllm' || modelTier === 'local' ? 'Tools unavailable in local mode' : ''}
         >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 011.414.586l5.414 5.414a2 2 0 01.586 1.414V19a2 2 0 01-2 2z"></path></svg>
             <span>Summarize View</span>
         </button>
         <button 
             onClick={() => handleQuickAction('errors')}
-            disabled={isLoading || modelTier === 'local' || modelTier === 'webllm'}
+            disabled={isLoading}
             className="flex items-center justify-center space-x-1 bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 px-3 rounded text-xs font-medium transition-colors disabled:opacity-50"
-            title={modelTier === 'webllm' || modelTier === 'local' ? 'Tools unavailable in local mode' : ''}
         >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
             <span>Analyze Errors</span>
@@ -872,11 +934,18 @@ User Question: ${userText}
             <div className={`max-w-[90%] rounded-lg p-3 text-xs leading-relaxed shadow-sm ${
                 msg.role === 'user' 
                   ? 'bg-blue-600 text-white' 
-                  : msg.isError 
-                    ? 'bg-red-900/50 border border-red-700 text-red-200' 
-                    : 'bg-gray-700 text-gray-200 border border-gray-600'
+                  : msg.isError
+                    ? 'bg-red-900/50 border border-red-700 text-red-200'
+                    : msg.isWarning
+                      ? 'bg-yellow-900/50 border border-yellow-700 text-yellow-200'
+                      : 'bg-gray-700 text-gray-200 border border-gray-600'
             }`}>
               <div className="flex items-start">
+                  {msg.isWarning && (
+                    <div className="mr-2 flex-shrink-0 text-yellow-400 pt-0.5">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    </div>
+                  )}
                   <div className="flex-1">
                      <FormattedMessage text={msg.text} onScrollToLog={onScrollToLog} />
                   </div>
@@ -930,7 +999,7 @@ User Question: ${userText}
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={(modelTier === 'local' || modelTier === 'webllm') ? "Ask (Tools unavailable in Local mode)..." : "Message AI..."}
+                placeholder="Message AI..."
                 disabled={isLoading}
                 className="flex-grow bg-gray-900 border border-gray-600 text-white rounded-md px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
             />
@@ -994,17 +1063,40 @@ User Question: ${userText}
     {/* WebLLM Consent Modal */}
     {showWebLlmConsent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <div className="bg-gray-800 rounded-lg shadow-xl border border-gray-700 w-full max-w-md p-6">
-                <h3 className="text-lg font-bold text-white mb-2">Download Local AI Model</h3>
-                <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-                    To use the on-device AI, a large model file (~2 GB) needs to be downloaded and cached in your browser. This is a one-time download.
-                    <br /><br />
-                    Your data will be processed locally and will not be sent to any server.
-                </p>
-                <div className="mt-6 flex justify-end space-x-2">
+            <div className="bg-gray-800 rounded-lg shadow-xl border border-gray-700 w-full max-w-md">
+                <div className="p-6">
+                    <div className="flex items-start space-x-4">
+                        <div className="flex-shrink-0 h-10 w-10 flex items-center justify-center rounded-full bg-gray-700">
+                            <svg className="h-6 w-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white">Enable On-Device AI</h3>
+                            <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                                To use the on-device AI, a large model file needs to be downloaded and cached in your browser.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="mt-4 bg-gray-900/50 border border-gray-700 rounded-md p-3 text-xs space-y-2">
+                        <div className="flex justify-between items-center">
+                            <span className="font-medium text-gray-400">Model Size</span>
+                            <span className="font-mono text-gray-200">~2 GB</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="font-medium text-gray-400">Download</span>
+                            <span className="font-mono text-gray-200">One-time only</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="font-medium text-gray-400">Privacy</span>
+                            <span className="font-mono text-green-400">100% Local</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div className="bg-gray-700/50 px-6 py-3 flex justify-end space-x-2 rounded-b-lg">
                     <button 
                         onClick={handleWebLlmConsentCancel}
-                        className="px-4 py-2 bg-gray-700 text-gray-200 text-sm rounded-md hover:bg-gray-600 transition-colors"
+                        className="px-4 py-2 bg-gray-600 text-gray-200 text-sm rounded-md hover:bg-gray-500 transition-colors"
                     >
                         Cancel
                     </button>
