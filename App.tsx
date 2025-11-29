@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { ungzip } from 'pako';
@@ -1043,7 +1044,7 @@ const App: React.FC = () => {
             <div className="absolute top-[20%] right-[0%] w-[30%] h-[30%] rounded-full bg-purple-600/10 blur-[100px]"></div>
           </div>
 
-          <div className="flex-grow flex flex-col items-center justify-center p-6 relative z-10">
+          <div className="flex-grow flex flex-col items-center justify-center p-2 sm:p-4 md:p-6 relative z-10">
             <div className="text-center mb-8">
                 <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-3">
                     <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">NHC</span> Log Viewer
@@ -1053,10 +1054,10 @@ const App: React.FC = () => {
                 </p>
             </div>
             
-            <div className="w-full max-w-2xl bg-gray-800/40 backdrop-blur-md border border-gray-700/50 rounded-2xl p-6 shadow-xl">
+            <div className="w-full max-w-2xl bg-gray-800/40 backdrop-blur-md border border-gray-700/50 rounded-2xl p-4 sm:p-6 shadow-xl">
                 <FileUpload onUpload={handleInitialUpload} isLoading={isLoading} />
                 
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="mt-6 grid grid-cols-2 gap-4">
                     <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-3 text-center">
                         <div className="flex justify-center mb-2 text-blue-400">
                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
@@ -1077,6 +1078,13 @@ const App: React.FC = () => {
                         </div>
                         <h3 className="text-xs font-semibold text-gray-200">Visual Stats</h3>
                         <p className="text-[10px] text-gray-500 mt-0.5">Interactive charts & summaries</p>
+                    </div>
+                    <div className="bg-gray-800/50 border border-gray-700/50 rounded-lg p-3 text-center">
+                        <div className="flex justify-center mb-2 text-yellow-400">
+                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                        </div>
+                        <h3 className="text-xs font-semibold text-gray-200">AI-Powered Analysis</h3>
+                        <p className="text-[10px] text-gray-500 mt-0.5">Chat with your logs via cloud or local AI</p>
                     </div>
                 </div>
             </div>

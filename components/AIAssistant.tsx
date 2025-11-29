@@ -26,7 +26,7 @@ declare global {
     ai?: {
       languageModel: {
         capabilities: () => Promise<{ available: 'readily' | 'after-download' | 'no' }>;
-        create: (options?: { systemPrompt?: string }) => Promise<{
+        create: (options?: { systemPrompt?: string, outputLanguage?: string }) => Promise<{
           prompt: (input: string) => Promise<string>;
           promptStreaming: (input: string) => AsyncIterable<string>;
           destroy: () => void;
@@ -238,6 +238,8 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
   
   // Default to Flash as it's balanced
   const [modelTier, setModelTier] = useState<string>('gemini-2.5-flash');
+  const [showWebLlmConsent, setShowWebLlmConsent] = useState(false);
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // API Key Management
@@ -257,6 +259,18 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ isOpen, onClose, visib
       localStorage.setItem('nhc_log_viewer_api_key', tempApiKey.trim());
       setUserApiKey(tempApiKey.trim());
       setIsSettingsOpen(false);
+
+      // After saving a key, check if the last action failed due to a missing key and retry it.
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.isError && lastMessage.text.includes('API Key is missing')) {
+          const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+          if (lastUserMessage) {
+              // Remove the error message from the UI before retrying
+              setMessages(prev => prev.filter(m => m.id !== lastMessage.id));
+              // Re-process the user's message with the new key
+              processUserMessage(lastUserMessage.text);
+          }
+      }
   };
 
   // Ref to hold the WebLLM engine instance to avoid re-init
@@ -322,6 +336,28 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
             parts: [{ text: "Understood. I will analyze logs using tools, strict [Log ID: <id>] formatting, and synonym-based search. I will provide conversational, interpretive responses while citing evidence." }]
         }
       ];
+  };
+
+  const handleWebLlmConsentAccept = () => {
+      setShowWebLlmConsent(false);
+      if (pendingPrompt) {
+          setIsLoading(true);
+          processWebLLM(pendingPrompt);
+          setPendingPrompt(null);
+      }
+  };
+
+  const handleWebLlmConsentCancel = () => {
+      setShowWebLlmConsent(false);
+      setPendingPrompt(null);
+      // If the user cancels, remove their last message from the UI to avoid confusion.
+      const lastMessage = messages[messages.length - 1];
+      if(lastMessage && lastMessage.role === 'user') {
+        setMessages(prev => prev.slice(0, -1));
+      }
+      // Revert model selection to avoid getting stuck in a consent loop
+      setModelTier('gemini-2.5-flash'); 
+      setIsLoading(false);
   };
 
   // Helper to execute client-side tools
@@ -451,13 +487,29 @@ When you find a "smoking gun" or root cause log, use \`scroll_to_log\` to show i
   const processLocalAI = async (userText: string) => {
       try {
           if (!window.ai?.languageModel) {
-            throw new Error("Local AI (Gemini Nano) is not available in this browser. This feature requires the latest Chrome (Canary/Dev) with the 'Prompt API for Gemini Nano' flag enabled.");
+            throw new Error("Local AI (Gemini Nano) is not available in this browser. This feature requires the latest Chrome with the 'Prompt API for Gemini Nano' flag enabled.");
           }
           
+          setDownloadProgress("Checking local model availability...");
+          const capabilities = await window.ai.languageModel.capabilities();
+
+          if (capabilities.available === 'no') {
+              throw new Error("Local AI (Gemini Nano) is not supported by your device or browser version.");
+          }
+
+          if (capabilities.available === 'after-download') {
+              setDownloadProgress("Downloading Gemini Nano model... This may take a moment.");
+          } else {
+              setDownloadProgress("");
+          }
+
           const session = await window.ai.languageModel.create({
-              systemPrompt: "You are a log analysis assistant. Answer briefly based on the logs provided. Tools are NOT available in this mode. Do not ask to filter or scroll, just analyze."
+              systemPrompt: "You are a log analysis assistant. Answer briefly based on the logs provided. Tools are NOT available in this mode. Do not ask to filter or scroll, just analyze.",
+              outputLanguage: 'en'
           });
           
+          setDownloadProgress(""); // Clear progress after creation
+
           // Local AI context window is small. We can only pass a summary of visible logs.
           const visibleLogSummary = visibleLogs.slice(0, 30).map(l => 
               `${l.timestamp.toISOString()} [${l.level}] ${l.daemon}: ${l.message}`
@@ -487,6 +539,7 @@ User Question: ${userText}
            }]);
       } finally {
           setIsLoading(false);
+          setDownloadProgress(""); // Ensure it's cleared on error
       }
   };
 
@@ -568,6 +621,12 @@ User Question: ${userText}
     }
     
     if (modelTier === 'webllm') {
+        // If engine isn't loaded, ask for consent to download first.
+        if (!webLlmEngineRef.current) {
+            setPendingPrompt(userText);
+            setShowWebLlmConsent(true);
+            return;
+        }
         setIsLoading(true);
         processWebLLM(userText);
         return;
@@ -788,7 +847,7 @@ User Question: ${userText}
       <div className="p-3 grid grid-cols-2 gap-2 border-b border-gray-700 bg-gray-800/50">
         <button 
             onClick={() => handleQuickAction('summarize')}
-            disabled={isLoading || visibleLogs.length === 0 || (modelTier !== 'gemini-2.5-flash' && modelTier !== 'gemini-3-pro-preview' && modelTier !== 'gemini-flash-lite-latest')}
+            disabled={isLoading || visibleLogs.length === 0 || modelTier === 'local' || modelTier === 'webllm'}
             className="flex items-center justify-center space-x-1 bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 px-3 rounded text-xs font-medium transition-colors disabled:opacity-50"
             title={modelTier === 'webllm' || modelTier === 'local' ? 'Tools unavailable in local mode' : ''}
         >
@@ -797,7 +856,7 @@ User Question: ${userText}
         </button>
         <button 
             onClick={() => handleQuickAction('errors')}
-            disabled={isLoading || (modelTier !== 'gemini-2.5-flash' && modelTier !== 'gemini-3-pro-preview' && modelTier !== 'gemini-flash-lite-latest')}
+            disabled={isLoading || modelTier === 'local' || modelTier === 'webllm'}
             className="flex items-center justify-center space-x-1 bg-gray-700 hover:bg-gray-600 text-gray-200 py-2 px-3 rounded text-xs font-medium transition-colors disabled:opacity-50"
             title={modelTier === 'webllm' || modelTier === 'local' ? 'Tools unavailable in local mode' : ''}
         >
@@ -845,7 +904,7 @@ User Question: ${userText}
                         </div>
                         <span className="text-[10px] text-gray-400">
                             {modelTier === 'gemini-3-pro-preview' ? 'Reasoning...' : 
-                             modelTier === 'local' ? 'Processing locally (Nano)...' : 
+                             modelTier === 'local' ? (downloadProgress ? 'Initializing...' : 'Processing locally (Nano)...') : 
                              modelTier === 'webllm' ? (downloadProgress ? 'Initializing...' : 'Thinking (Llama 3)...') :
                              'Analyzing logs...'}
                         </span>
@@ -926,6 +985,34 @@ User Question: ${userText}
                         className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
                     >
                         Save Key
+                    </button>
+                </div>
+            </div>
+        </div>
+    )}
+
+    {/* WebLLM Consent Modal */}
+    {showWebLlmConsent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <div className="bg-gray-800 rounded-lg shadow-xl border border-gray-700 w-full max-w-md p-6">
+                <h3 className="text-lg font-bold text-white mb-2">Download Local AI Model</h3>
+                <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                    To use the on-device AI, a large model file (~2 GB) needs to be downloaded and cached in your browser. This is a one-time download.
+                    <br /><br />
+                    Your data will be processed locally and will not be sent to any server.
+                </p>
+                <div className="mt-6 flex justify-end space-x-2">
+                    <button 
+                        onClick={handleWebLlmConsentCancel}
+                        className="px-4 py-2 bg-gray-700 text-gray-200 text-sm rounded-md hover:bg-gray-600 transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={handleWebLlmConsentAccept}
+                        className="px-4 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors"
+                    >
+                        Accept & Download
                     </button>
                 </div>
             </div>

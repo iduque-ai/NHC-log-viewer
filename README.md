@@ -12,6 +12,7 @@ It provides powerful tools for developers and system administrators to quickly d
 *   **📂 Multi-Format Support**:
     *   Supports `.log` and `.txt` files.
     *   Native support for compressed archives: `.zip` and `.gz` (GZIP).
+*   **🤖 AI Assistant**: Chat with your logs! Use Google's Gemini models for deep analysis, or run models like Llama 3 entirely on-device for complete privacy.
 *   **🔍 Advanced Search & Filtering**:
     *   **Boolean Logic**: Use complex queries like `(error || warning) && !network`.
     *   **Regex Support**: Full Regular Expression capabilities.
@@ -61,5 +62,7 @@ The application automatically detects and parses:
 *   **Framework**: React (TypeScript)
 *   **Build Tool**: Vite
 *   **Styling**: Tailwind CSS
+*   **AI (Cloud)**: Google Gemini (`@google/genai`)
+*   **AI (Local)**: WebLLM / Llama 3 (`@mlc-ai/web-llm`)
 *   **Charts**: Chart.js
 *   **Compression**: JSZip, Pako
