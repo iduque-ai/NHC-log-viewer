@@ -454,6 +454,7 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, visibleLogs, 
             // in the `reduce` function, we ensure TypeScript correctly infers the type of the
             // `counts` object. This allows `Object.entries` to work as expected, resolving
             // the downstream type errors in `sort` and `map`.
+            // FIX: Explicitly typed the accumulator for the reduce function to resolve type inference issues.
             const counts = targetLogs.filter(l => l.level === 'ERROR' || l.level === 'CRITICAL').reduce<Record<string, { count: number; id: number }>>((acc, log) => {
                 const genericMessage = log.message.replace(/\d+/g, 'N');
                 acc[genericMessage] = (acc[genericMessage] || { count: 0, id: log.id });
@@ -553,29 +554,46 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, visibleLogs, 
 
     const history: Content[] = messages.slice(1).reduce((acc: Content[], m) => {
         if (m.isError || m.isWarning) return acc;
-        if (m.role === 'model' && m.text.startsWith('Tool Call:')) { /* ... skip ... */ }
-        else if (m.role === 'model' && m.text.startsWith('Tool Response:')) { /* ... skip ... */ }
-        else { acc.push({ role: m.role, parts: [{ text: m.text }] }) }
+        if (m.role === 'model' && (m.text.startsWith('Tool Call:') || m.text.startsWith('Tool Response:'))) {
+          // Skip these messages as they are for UI display only
+        } else {
+            acc.push({ role: m.role, parts: [{ text: m.text }] });
+        }
         return acc;
     }, []);
-
-    history.unshift({ role: 'system', parts: [{ text: systemPrompt }] });
+    
     history.push({ role: 'user', parts: [{ text: prompt }] });
     
     const historyChars = JSON.stringify(history).length;
-    console.log(`[AI] Preparing to call Gemini. History contains ${history.length} parts (~${historyChars} chars).`);
+    const payloadConfig = { 
+        systemInstruction: systemPrompt, 
+        tools: [{ functionDeclarations: getAvailableTools(conversationStateRef.current) }] 
+    };
 
+    console.groupCollapsed(`[AI] Calling Gemini with ~${(historyChars / 4).toFixed(0)} tokens`);
+    console.log(`[AI] Model: ${effectiveModel}`);
+    console.log('[AI] Full Payload:', { contents: history, config: payloadConfig });
+    console.groupEnd();
+    
     const MAX_TURNS = 10;
     for (let turn = 1; turn <= MAX_TURNS; turn++) {
-        console.log(`[AI] Turn ${turn}/${MAX_TURNS} using ${effectiveModel} in state: ${conversationStateRef.current}`);
+        console.groupCollapsed(`[AI] Turn ${turn}/${MAX_TURNS}`);
+        console.log(`[AI] State: ${conversationStateRef.current}`);
 
         let response: GenerateContentResponse;
         try {
-            const result = await ai.models.generateContent({ model: effectiveModel, contents: history, config: { tools: [{ functionDeclarations: getAvailableTools(conversationStateRef.current) }] } });
+            const result = await ai.models.generateContent({ 
+                model: effectiveModel, 
+                contents: history, 
+                config: payloadConfig
+            });
             response = { text: (result as any).text, functionCalls: result.functionCalls, candidates: result.candidates };
+            
             const responseText = response.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || "";
             const responseChars = responseText.length + JSON.stringify(response.functionCalls || {}).length;
-            console.log(`[AI] Received response from Gemini (~${responseChars} chars). Has text: ${!!responseText}, Has function calls: ${!!response.functionCalls?.length}`);
+            console.log(`[AI] Received response from Gemini (~${(responseChars / 4).toFixed(0)} tokens)`);
+            console.log('[AI] Full Response:', result);
+
         } catch (e: any) {
             console.error("AI Error:", e);
             let errorMessage = `An error occurred: ${e.message || 'Unknown error'}`;
@@ -595,17 +613,22 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, visibleLogs, 
             } catch {}
             addMessage('model', errorMessage, true);
             setIsLoading(false);
+            console.groupEnd(); // End turn group on error
             return;
         }
 
         const functionCalls = response.functionCalls;
         if (functionCalls && functionCalls.length > 0) {
-            history.push({ role: 'model', parts: [{ functionCall: functionCalls[0] }] });
-            const toolCall = functionCalls[0];
-            console.log('[AI] Executing tool:', toolCall.name, toolCall.args);
+            const toolCall = functionCalls[0]; // Assuming one tool call for now
+            history.push({ role: 'model', parts: [{ functionCall: toolCall }] });
+            
+            console.groupCollapsed(`[AI] Executing tool: ${toolCall.name}`);
+            console.log('[AI] Arguments:', toolCall.args);
             const toolResult = await handleToolCall(toolCall.name, toolCall.args, ai);
             const toolResultChars = JSON.stringify(toolResult).length;
-            console.log(`[AI] Tool '${toolCall.name}' responded (~${toolResultChars} chars):`, toolResult);
+            console.log(`[AI] Tool responded with ~${(toolResultChars / 4).toFixed(0)} tokens.`);
+            console.log('[AI] Tool Result:', toolResult);
+            console.groupEnd();
 
             if (toolCall.name === 'search_logs' && toolResult?.example_log_ids?.length > 0) {
                 conversationStateRef.current = 'ANALYZING';
@@ -614,11 +637,13 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, visibleLogs, 
             history.push({ role: 'tool', parts: [{ functionResponse: { name: toolCall.name, response: { result: JSON.stringify(toolResult) } } }] } as unknown as Content);
         } else {
             const text = response.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || "I'm sorry, I couldn't generate a response.";
-            console.log('[AI] Model returned final answer. Ending turn loop.');
+            console.log('[AI] Model returned final answer.');
             addMessage('model', text);
             conversationStateRef.current = 'IDLE';
+            console.groupEnd(); // End turn group
             break;
         }
+        console.groupEnd(); // End turn group
     }
     setIsLoading(false);
   }, [userApiKey, allLogs, allDaemons, messages, addMessage, handleToolCall, savedFindings]);
@@ -646,9 +671,18 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ onClose, visibleLogs, 
             chromeAiSession.current = await window.ai.languageModel.create({ systemPrompt });
         }
         
-        console.log(`[AI] Prompting Chrome AI (~${prompt.length} chars).`);
+        const payloadSize = prompt.length;
+        console.groupCollapsed(`[AI] Calling Chrome Built-in AI with ~${(payloadSize / 4).toFixed(0)} tokens`);
+        console.log('[AI] Prompt:', prompt);
+        console.groupEnd();
+
         const response = await chromeAiSession.current.prompt(prompt);
-        console.log(`[AI] Received response from Chrome AI (~${response.length} chars).`);
+        
+        const responseSize = response.length;
+        console.groupCollapsed(`[AI] Received response from Chrome AI with ~${(responseSize / 4).toFixed(0)} tokens`);
+        console.log('[AI] Response:', response);
+        console.groupEnd();
+        
         addMessage('model', response);
     } catch (e: any) {
         console.error("Chrome AI Error:", e);
