@@ -2,6 +2,7 @@
 
 
 
+
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { ungzip } from 'pako';
@@ -1045,49 +1046,53 @@ const App: React.FC = () => {
               </button>
             </div>
 
-            <div className="flex-grow min-h-0 relative">
-              <LogViewer
-                logs={filteredLogs}
-                totalCount={baseLogs.length}
-                selectedTimezone={selectedTimezone}
-                totalDaemonCount={allDaemons.length}
-                keywordQueries={activeTab.filters.keywordQueries}
-                enableKeywordHighlight={activeTab.filters.enableKeywordHighlight}
-                onRowDoubleClick={activeTab.id !== tabs[0]?.id ? handleRowDoubleClick : undefined}
-                onKeywordClick={handleKeywordClick}
-                scrollToLogId={activeTab.id === tabs[0]?.id ? scrollToLogId : null}
-                onScrollComplete={handleScrollComplete}
-                currentPage={activeTab.currentPage || 1}
-                onPageChange={handlePageChange}
-                scrollTop={activeTab.scrollTop}
-                onScrollChange={handleScrollChange}
-                // View State Persistence
-                viewMode={activeTab.viewMode}
-                onViewModeChange={(mode) => handleTabViewStateChange({ viewMode: mode })}
-                tabId={activeTab.id}
-                logsPerPage={activeTab.logsPerPage || 500}
-                onLogsPerPageChange={handleLogsPerPageChange}
-                searchQuery={activeTab.searchQuery || ''}
-                onSearchQueryChange={(s) => handleTabViewStateChange({ searchQuery: s })}
-                searchMatchCase={activeTab.searchMatchCase || false}
-                onSearchMatchCaseChange={(b) => handleTabViewStateChange({ searchMatchCase: b })}
-                searchMatchWholeWord={activeTab.searchMatchWholeWord || false}
-                onSearchMatchWholeWordChange={(b) => handleTabViewStateChange({ searchMatchWholeWord: b })}
-                searchUseRegex={activeTab.searchUseRegex || false}
-                onSearchUseRegexChange={(b) => handleTabViewStateChange({ searchUseRegex: b })}
-              />
-
-              <AIAssistant 
-                 isOpen={isAIPanelOpen} 
-                 onClose={() => setIsAIPanelOpen(false)} 
-                 visibleLogs={filteredLogs}
-                 allLogs={baseLogs}
-                 allDaemons={allDaemons}
-                 onUpdateFilters={handleAICreateTab}
-                 onScrollToLog={handleAIScrollToLog}
-                 savedFindings={savedFindings}
-                 onSaveFinding={handleSaveFinding}
-              />
+            <div className="flex flex-grow min-h-0">
+               <div className="flex-grow min-w-0">
+                  <LogViewer
+                    logs={filteredLogs}
+                    totalCount={baseLogs.length}
+                    selectedTimezone={selectedTimezone}
+                    totalDaemonCount={allDaemons.length}
+                    keywordQueries={activeTab.filters.keywordQueries}
+                    enableKeywordHighlight={activeTab.filters.enableKeywordHighlight}
+                    onRowDoubleClick={activeTab.id !== tabs[0]?.id ? handleRowDoubleClick : undefined}
+                    onKeywordClick={handleKeywordClick}
+                    scrollToLogId={activeTab.id === tabs[0]?.id ? scrollToLogId : null}
+                    onScrollComplete={handleScrollComplete}
+                    currentPage={activeTab.currentPage || 1}
+                    onPageChange={handlePageChange}
+                    scrollTop={activeTab.scrollTop}
+                    onScrollChange={handleScrollChange}
+                    // View State Persistence
+                    viewMode={activeTab.viewMode}
+                    onViewModeChange={(mode) => handleTabViewStateChange({ viewMode: mode })}
+                    tabId={activeTab.id}
+                    logsPerPage={activeTab.logsPerPage || 500}
+                    onLogsPerPageChange={handleLogsPerPageChange}
+                    searchQuery={activeTab.searchQuery || ''}
+                    onSearchQueryChange={(s) => handleTabViewStateChange({ searchQuery: s })}
+                    searchMatchCase={activeTab.searchMatchCase || false}
+                    onSearchMatchCaseChange={(b) => handleTabViewStateChange({ searchMatchCase: b })}
+                    searchMatchWholeWord={activeTab.searchMatchWholeWord || false}
+                    onSearchMatchWholeWordChange={(b) => handleTabViewStateChange({ searchMatchWholeWord: b })}
+                    searchUseRegex={activeTab.searchUseRegex || false}
+                    onSearchUseRegexChange={(b) => handleTabViewStateChange({ searchUseRegex: b })}
+                  />
+               </div>
+              {isAIPanelOpen && (
+                <div className="flex-shrink-0 w-96 border-l border-gray-700">
+                    <AIAssistant 
+                      onClose={() => setIsAIPanelOpen(false)} 
+                      visibleLogs={filteredLogs}
+                      allLogs={baseLogs}
+                      allDaemons={allDaemons}
+                      onUpdateFilters={handleAICreateTab}
+                      onScrollToLog={handleAIScrollToLog}
+                      savedFindings={savedFindings}
+                      onSaveFinding={handleSaveFinding}
+                    />
+                </div>
+              )}
             </div>
           </main>
         </>
